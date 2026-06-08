@@ -1,0 +1,23 @@
+# Python
+backend/venv/
+backend/app/__pycache__/
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+*.db
+
+# DICOM / test files
+*.dcm
+
+# ML model (large binary)
+*.pkl
+
+# Frontend
+frontend/node_modules/
+frontend/.vite-cache/
+frontend/dist/
+
+# OS
+.DS_Store

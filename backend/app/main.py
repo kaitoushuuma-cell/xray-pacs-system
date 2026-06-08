@@ -1,0 +1,429 @@
+from fastapi import FastAPI, File, UploadFile, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from datetime import datetime
+from dotenv import load_dotenv
+import cv2
+import numpy as np
+import joblib
+import shutil
+import uuid
+import os
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
+
+from database import init_db, get_db, Patient, Study, Image, Report
+
+app = FastAPI()
+
+# CORS設定
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# モデル読み込み
+model = joblib.load("xray_model.pkl")
+
+# DB初期化
+init_db()
+
+# ────────────────────────────
+# 患者管理
+# ────────────────────────────
+
+# 患者登録
+@app.post("/patients")
+def create_patient(
+    patient_id: str,
+    name: str,
+    birth_date: str,
+    gender: str,
+    db: Session = Depends(get_db)
+):
+    # 重複チェック
+    existing = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="この患者IDは既に登録されています")
+    
+    patient = Patient(
+        patient_id=patient_id,
+        name=name,
+        birth_date=birth_date,
+        gender=gender
+    )
+    db.add(patient)
+    db.commit()
+    db.refresh(patient)
+    return {"message": "患者登録完了", "patient_id": patient.patient_id}
+
+# 患者一覧取得
+@app.get("/patients")
+def get_patients(db: Session = Depends(get_db)):
+    patients = db.query(Patient).all()
+    return [
+        {
+            "id": p.id,
+            "patient_id": p.patient_id,
+            "name": p.name,
+            "birth_date": p.birth_date,
+            "gender": p.gender,
+            "created_at": p.created_at
+        }
+        for p in patients
+    ]
+
+# 患者詳細取得（過去検査履歴含む）
+@app.get("/patients/{patient_id}")
+def get_patient(patient_id: str, db: Session = Depends(get_db)):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+    return {
+        "id": patient.id,
+        "patient_id": patient.patient_id,
+        "name": patient.name,
+        "birth_date": patient.birth_date,
+        "gender": patient.gender,
+        "studies": [
+            {
+                "study_id": s.study_id,
+                "patient_name": patient.name,
+                "modality": s.modality,
+                "body_part": s.body_part,
+                "study_date": str(s.study_date)[:10] if s.study_date else "",
+                "status": s.status,
+                "jpeg_file": next((img.file_path.split("/")[-1] for img in reversed(s.images) if img.file_path), None),
+                "ai_result": next((img.ai_result for img in reversed(s.images) if img.ai_result), None),
+                "ai_confidence": next((f"{img.ai_confidence*100:.1f}%" for img in reversed(s.images) if img.ai_confidence), None)
+            }
+            for s in patient.studies
+        ]
+    }
+
+# ────────────────────────────
+# 検査管理
+# ────────────────────────────
+
+# 検査登録
+@app.post("/studies")
+def create_study(
+    patient_id: str,
+    modality: str,
+    body_part: str,
+    db: Session = Depends(get_db)
+):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+    
+    study = Study(
+        study_id=str(uuid.uuid4()),
+        patient_id=patient.id,
+        modality=modality,
+        body_part=body_part,
+        status="未読"
+    )
+    db.add(study)
+    db.commit()
+    db.refresh(study)
+    return {"message": "検査登録完了", "study_id": study.study_id}
+
+# 検査一覧取得
+@app.get("/studies")
+def get_studies(db: Session = Depends(get_db)):
+    studies = db.query(Study).all()
+    return [
+        {
+            "study_id": s.study_id,
+            "modality": s.modality,
+            "body_part": s.body_part,
+            "study_date": s.study_date,
+            "status": s.status,
+            "patient_name": s.patient.name,
+            "jpeg_file": next((img.file_path.split("/")[-1] for img in reversed(s.images) if img.file_path), None)
+        }
+        for s in studies
+    ]
+
+# 検査ステータス更新
+@app.patch("/studies/{study_id}/status")
+def update_study_status(study_id: str, status: str, db: Session = Depends(get_db)):
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+    study.status = status
+    db.commit()
+    return {"message": "ステータス更新完了", "study_id": study_id, "status": status}
+
+# ────────────────────────────
+# AI診断（既存機能を拡張）
+# ────────────────────────────
+
+@app.post("/predict")
+async def predict(
+    study_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    # 検査確認
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+
+    # 画像保存
+    image_filename = f"{uuid.uuid4()}.png"
+    image_path = f"../data/images/{image_filename}"
+    with open(image_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    # AI診断
+    contents = open(image_path, "rb").read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+    img_resized = cv2.resize(img, (64, 64))
+    img_flat = img_resized.flatten().reshape(1, -1)
+
+    pred = model.predict(img_flat)[0]
+    prob = model.predict_proba(img_flat)[0]
+    result = "肺炎" if pred == 1 else "正常"
+    confidence = float(max(prob))
+
+    # DB保存
+    image_record = Image(
+        study_id=study.id,
+        file_path=image_path,
+        ai_result=result,
+        ai_confidence=confidence
+    )
+    db.add(image_record)
+
+    # 検査ステータス更新
+    study.status = "AI診断済"
+    db.commit()
+
+    return {
+        "result": result,
+        "confidence": f"{confidence*100:.1f}%",
+        "study_id": study_id
+    }
+
+# ────────────────────────────
+# レポート管理
+# ────────────────────────────
+
+@app.post("/reports")
+def create_report(
+    study_id: str,
+    patient_name: str,
+    modality: str,
+    study_date: str,
+    ai_result: str,
+    ai_confidence: str,
+    findings: str,
+    conclusion: str,
+    radiologist: str,
+    db: Session = Depends(get_db)
+):
+    report = Report(
+        study_id=study_id,
+        patient_name=patient_name,
+        modality=modality,
+        study_date=study_date,
+        ai_result=ai_result,
+        ai_confidence=ai_confidence,
+        findings=findings,
+        conclusion=conclusion,
+        radiologist=radiologist,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    db.add(report)
+    db.commit()
+    db.refresh(report)
+    return {"message": "レポート作成完了", "report_id": report.id}
+
+@app.get("/reports")
+def get_reports(db: Session = Depends(get_db)):
+    reports = db.query(Report).all()
+    return [
+        {
+            "id": r.id,
+            "study_id": r.study_id,
+            "patient_name": r.patient_name,
+            "modality": r.modality,
+            "study_date": r.study_date,
+            "ai_result": r.ai_result,
+            "ai_confidence": r.ai_confidence,
+            "findings": r.findings,
+            "conclusion": r.conclusion,
+            "radiologist": r.radiologist,
+            "created_at": r.created_at
+        }
+        for r in reports
+    ]
+
+@app.get("/reports/{report_id}")
+def get_report(report_id: int, db: Session = Depends(get_db)):
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="レポートが見つかりません")
+    return report
+
+# ────────────────────────────
+# AI 所見・結論 自動生成（テンプレート方式・APIキー不要）
+# ────────────────────────────
+
+import random
+
+def _build_report_text(ai_result: str, ai_confidence: str, modality: str, body_part: str, study_date: str):
+    modality = modality or "X線"
+    body_part = body_part if body_part and body_part != "不明" else "胸部"
+    date_str = study_date or "本日"
+
+    if ai_result == "肺炎":
+        findings_options = [
+            f"{date_str}撮影の{modality}画像において、{body_part}に浸潤影を認めます。右下肺野を中心に境界不明瞭な淡い陰影が見られ、気管支血管束の不明瞭化を伴っています。胸水の貯留は軽度認められます。",
+            f"{date_str}の{modality}画像では、{body_part}の両側肺野に散在性の浸潤影を認めます。特に右中下肺野において濃度上昇が目立ち、エアブロンコグラムが確認されます。縦隔の偏位は認めません。",
+            f"{modality}画像にて、{body_part}右肺野優位に均一な浸潤影を認めます。肺門部のリンパ節腫大は明らかではありません。左肺野は比較的保たれていますが、軽度の透過性低下を伴います。",
+        ]
+        conclusion_options = [
+            f"上記所見より、細菌性肺炎が疑われます（AI確信度：{ai_confidence}）。臨床症状および血液検査所見と合わせてご判断ください。",
+            f"肺炎像に矛盾しない所見です（AI確信度：{ai_confidence}）。適切な抗菌薬治療の開始をご検討ください。経過観察のフォローアップ撮影を推奨します。",
+            f"細菌性肺炎を示唆する浸潤影を認めます（AI確信度：{ai_confidence}）。早期の治療介入が望まれます。",
+        ]
+    else:
+        findings_options = [
+            f"{date_str}撮影の{modality}画像において、{body_part}両肺野は清明で、明らかな浸潤影・結節影・腫瘤影は認めません。肺門リンパ節の腫大や胸水の貯留も認めません。横隔膜および肋骨横隔膜角は正常です。",
+            f"{date_str}の{modality}画像では、{body_part}に明らかな病変は認められません。心陰影の拡大なく、肺血管影は正常分布を示しています。骨格系に明らかな異常は認めません。",
+            f"{modality}画像にて、{body_part}の両肺野は清明です。縦隔の偏位や拡大は認めず、胸膜病変も認めません。心胸郭比は正常範囲内です。",
+        ]
+        conclusion_options = [
+            f"明らかな異常所見は認めません（AI確信度：{ai_confidence}）。定期的なフォローアップをお勧めします。",
+            f"今回の{modality}検査において、有意な肺野異常は指摘できません（AI確信度：{ai_confidence}）。",
+            f"正常範囲内の所見です（AI確信度：{ai_confidence}）。臨床症状が持続する場合は追加検査をご検討ください。",
+        ]
+
+    return {
+        "findings": random.choice(findings_options),
+        "conclusion": random.choice(conclusion_options)
+    }
+
+
+@app.post("/generate-report-text")
+def generate_report_text(study_id: str, db: Session = Depends(get_db)):
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+
+    image = next((img for img in reversed(study.images) if img.ai_result), None)
+    ai_result = image.ai_result if image else "正常"
+    ai_confidence = f"{image.ai_confidence*100:.1f}%" if image and image.ai_confidence else "不明"
+    study_date_str = str(study.study_date)[:10] if study.study_date else ""
+
+    return _build_report_text(ai_result, ai_confidence, study.modality, study.body_part, study_date_str)
+
+# 動作確認用
+@app.get("/")
+def root():
+    return {"message": "xray-pacs-system API 起動中"}
+
+# ────────────────────────────
+# DICOM対応
+# ────────────────────────────
+
+@app.post("/dicom/upload")
+async def upload_dicom(
+    patient_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    import pydicom
+    import io
+    from PIL import Image as PILImage
+
+    # 患者確認
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+
+    # DICOMファイルを読み込む
+    contents = await file.read()
+    ds = pydicom.dcmread(io.BytesIO(contents), force=True)
+
+    # ヘッダ情報を取得
+    modality = str(ds.get("Modality", "不明"))
+    raw_date = ds.get("StudyDate", None)
+    if raw_date and str(raw_date) != "":
+        try:
+            study_date = datetime.strptime(str(raw_date), "%Y%m%d")
+        except:
+            study_date = datetime.now()
+    else:
+        study_date = datetime.now()
+
+    rows = int(ds.get("Rows", 0))
+    cols = int(ds.get("Columns", 0))
+    print(f"DEBUG: rows={rows}, cols={cols}, hasPixelData={hasattr(ds, 'PixelData')}")
+
+    # ピクセルデータをJPEGに変換して保存
+    jpeg_filename = None
+    if hasattr(ds, 'PixelData') and rows > 0 and cols > 0:
+        pixel_array = ds.pixel_array
+        # 16bit → 8bitに変換
+        pixel_array = pixel_array.astype(float)
+        pixel_array = (pixel_array - pixel_array.min()) / (pixel_array.max() - pixel_array.min()) * 255
+        pixel_array = pixel_array.astype(np.uint8)
+
+        # JPEG保存
+        jpeg_filename = f"{uuid.uuid4()}.jpg"
+        jpeg_path = f"/root/xray-pacs-system/data/images/{jpeg_filename}"
+        img = PILImage.fromarray(pixel_array)
+        img.save(jpeg_path)
+
+# 検査をDBに登録（先にstudyを保存してidを取得）
+    study = Study(
+        study_id=str(uuid.uuid4()),
+        patient_id=patient.id,
+        modality=modality,
+        body_part="不明",
+        study_date=study_date,
+        status="未読"
+    )
+    db.add(study)
+    db.commit()
+    db.refresh(study)  # ← ここでstudy.idが確定する
+
+    # 画像レコードをDBに保存
+    if jpeg_filename:
+        image_record = Image(
+            study_id=study.id,  # ← 確定したidを使う
+            file_path=f"/root/xray-pacs-system/data/images/{jpeg_filename}",
+            ai_result=None,
+            ai_confidence=None
+        )
+        db.add(image_record)
+        db.commit()
+    db.refresh(study)
+
+    return {
+        "message": "DICOMアップロード完了",
+        "study_id": study.study_id,
+        "modality": modality,
+        "study_date": study_date.strftime("%Y-%m-%d"),
+        "image_size": f"{rows} x {cols}",
+        "jpeg_file": jpeg_filename
+    }
+
+    # ────────────────────────────
+# 画像配信
+# ────────────────────────────
+from fastapi.responses import FileResponse
+
+@app.get("/images/{filename}")
+def get_image(filename: str):
+    image_path = f"/root/xray-pacs-system/data/images/{filename}"
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="画像が見つかりません")
+    return FileResponse(image_path, media_type="image/jpeg")
