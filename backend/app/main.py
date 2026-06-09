@@ -143,7 +143,9 @@ def get_studies(db: Session = Depends(get_db)):
             "study_date": s.study_date,
             "status": s.status,
             "patient_name": s.patient.name,
-            "jpeg_file": next((img.file_path.split("/")[-1] for img in reversed(s.images) if img.file_path), None)
+            "jpeg_file": next((img.file_path.split("/")[-1] for img in reversed(s.images) if img.file_path), None),
+            "ai_result": next((img.ai_result for img in reversed(s.images) if img.ai_result), None),
+            "ai_confidence": next((f"{img.ai_confidence*100:.1f}%" for img in reversed(s.images) if img.ai_confidence), None),
         }
         for s in studies
     ]
@@ -272,43 +274,40 @@ def get_report(report_id: int, db: Session = Depends(get_db)):
     return report
 
 # ────────────────────────────
-# AI 所見・結論 自動生成（テンプレート方式・APIキー不要）
+# AI 所見・結論 自動生成
 # ────────────────────────────
-
-import random
 
 def _build_report_text(ai_result: str, ai_confidence: str, modality: str, body_part: str, study_date: str):
     modality = modality or "X線"
     body_part = body_part if body_part and body_part != "不明" else "胸部"
-    date_str = study_date or "本日"
+    date_str = study_date or datetime.now().strftime("%Y-%m-%d")
 
     if ai_result == "肺炎":
-        findings_options = [
-            f"{date_str}撮影の{modality}画像において、{body_part}に浸潤影を認めます。右下肺野を中心に境界不明瞭な淡い陰影が見られ、気管支血管束の不明瞭化を伴っています。胸水の貯留は軽度認められます。",
-            f"{date_str}の{modality}画像では、{body_part}の両側肺野に散在性の浸潤影を認めます。特に右中下肺野において濃度上昇が目立ち、エアブロンコグラムが確認されます。縦隔の偏位は認めません。",
-            f"{modality}画像にて、{body_part}右肺野優位に均一な浸潤影を認めます。肺門部のリンパ節腫大は明らかではありません。左肺野は比較的保たれていますが、軽度の透過性低下を伴います。",
-        ]
-        conclusion_options = [
-            f"上記所見より、細菌性肺炎が疑われます（AI確信度：{ai_confidence}）。臨床症状および血液検査所見と合わせてご判断ください。",
-            f"肺炎像に矛盾しない所見です（AI確信度：{ai_confidence}）。適切な抗菌薬治療の開始をご検討ください。経過観察のフォローアップ撮影を推奨します。",
-            f"細菌性肺炎を示唆する浸潤影を認めます（AI確信度：{ai_confidence}）。早期の治療介入が望まれます。",
-        ]
+        findings = (
+            f"{date_str}撮影の{modality}画像において、{body_part}に浸潤影を認めます。"
+            f"右下肺野を中心に境界不明瞭な淡い陰影が見られ、気管支血管束の不明瞭化を伴います。"
+            f"エアブロンコグラムを一部に認め、左肺野にも軽微な透過性低下があります。"
+            f"縦隔の偏位は認めず、胸水貯留は軽度です。"
+        )
+        conclusion = (
+            f"上記所見より、細菌性肺炎が疑われます（AI確信度：{ai_confidence}）。"
+            f"臨床症状・血液検査所見と合わせてご判断のうえ、適切な抗菌薬治療をご検討ください。"
+            f"治療効果の確認のため、1〜2週間後のフォローアップ撮影を推奨します。"
+        )
     else:
-        findings_options = [
-            f"{date_str}撮影の{modality}画像において、{body_part}両肺野は清明で、明らかな浸潤影・結節影・腫瘤影は認めません。肺門リンパ節の腫大や胸水の貯留も認めません。横隔膜および肋骨横隔膜角は正常です。",
-            f"{date_str}の{modality}画像では、{body_part}に明らかな病変は認められません。心陰影の拡大なく、肺血管影は正常分布を示しています。骨格系に明らかな異常は認めません。",
-            f"{modality}画像にて、{body_part}の両肺野は清明です。縦隔の偏位や拡大は認めず、胸膜病変も認めません。心胸郭比は正常範囲内です。",
-        ]
-        conclusion_options = [
-            f"明らかな異常所見は認めません（AI確信度：{ai_confidence}）。定期的なフォローアップをお勧めします。",
-            f"今回の{modality}検査において、有意な肺野異常は指摘できません（AI確信度：{ai_confidence}）。",
-            f"正常範囲内の所見です（AI確信度：{ai_confidence}）。臨床症状が持続する場合は追加検査をご検討ください。",
-        ]
+        findings = (
+            f"{date_str}撮影の{modality}画像において、{body_part}両肺野は清明で、"
+            f"浸潤影・結節影・腫瘤影は認めません。"
+            f"肺門リンパ節の腫大および胸水貯留も認めません。"
+            f"心陰影の拡大なく、横隔膜・肋骨横隔膜角は正常範囲内です。"
+        )
+        conclusion = (
+            f"明らかな異常所見は認めません（AI確信度：{ai_confidence}）。"
+            f"定期的なフォローアップをお勧めします。"
+            f"臨床症状が持続する場合は、CT等の追加検査をご検討ください。"
+        )
 
-    return {
-        "findings": random.choice(findings_options),
-        "conclusion": random.choice(conclusion_options)
-    }
+    return {"findings": findings, "conclusion": conclusion}
 
 
 @app.post("/generate-report-text")
@@ -328,6 +327,148 @@ def generate_report_text(study_id: str, db: Session = Depends(get_db)):
 @app.get("/")
 def root():
     return {"message": "xray-pacs-system API 起動中"}
+
+# ────────────────────────────
+# 一般画像アップロード（PNG/JPEG → 検査自動作成）
+# ────────────────────────────
+
+@app.post("/simple-upload")
+async def simple_upload(
+    patient_id: str,
+    modality: str = "CR",
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+
+    image_filename = f"{uuid.uuid4()}.jpg"
+    image_path = f"/root/xray-pacs-system/data/images/{image_filename}"
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="画像の読み込みに失敗しました")
+    cv2.imwrite(image_path, img)
+
+    study = Study(
+        study_id=str(uuid.uuid4()),
+        patient_id=patient.id,
+        modality=modality,
+        body_part="胸部" if modality == "CR" else "不明",
+        study_date=datetime.now(),
+        status="未読"
+    )
+    db.add(study)
+    db.commit()
+    db.refresh(study)
+
+    image_record = Image(
+        study_id=study.id,
+        file_path=image_path,
+        ai_result=None,
+        ai_confidence=None
+    )
+    db.add(image_record)
+    db.commit()
+
+    return {"message": "アップロード完了", "study_id": study.study_id, "modality": modality, "jpeg_file": image_filename}
+
+# ────────────────────────────
+# 患者削除
+# ────────────────────────────
+
+@app.delete("/patients/{patient_id}")
+def delete_patient(patient_id: str, db: Session = Depends(get_db)):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+    for study in patient.studies:
+        for image in study.images:
+            db.delete(image)
+        db.delete(study)
+    db.delete(patient)
+    db.commit()
+    return {"message": "削除しました"}
+
+# ────────────────────────────
+# レポート削除
+# ────────────────────────────
+
+@app.delete("/reports/{report_id}")
+def delete_report(report_id: int, db: Session = Depends(get_db)):
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="レポートが見つかりません")
+    db.delete(report)
+    db.commit()
+    return {"message": "削除しました"}
+
+# ────────────────────────────
+# 登録済み画像でAI診断
+# ────────────────────────────
+
+@app.post("/studies/{study_id}/predict-registered")
+def predict_from_registered(study_id: str, db: Session = Depends(get_db)):
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+
+    image = next((img for img in reversed(study.images) if img.file_path), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="この検査には画像がありません")
+
+    img_data = cv2.imread(image.file_path, cv2.IMREAD_GRAYSCALE)
+    if img_data is None:
+        raise HTTPException(status_code=500, detail="画像の読み込みに失敗しました")
+
+    img_resized = cv2.resize(img_data, (64, 64))
+    img_flat = img_resized.flatten().reshape(1, -1)
+
+    pred = model.predict(img_flat)[0]
+    prob = model.predict_proba(img_flat)[0]
+    result = "肺炎" if pred == 1 else "正常"
+    confidence = float(max(prob))
+
+    image.ai_result = result
+    image.ai_confidence = confidence
+    study.status = "AI診断済"
+    db.commit()
+
+    return {"result": result, "confidence": f"{confidence*100:.1f}%", "study_id": study_id}
+
+# ────────────────────────────
+# 検査への画像追加
+# ────────────────────────────
+
+@app.post("/studies/{study_id}/images")
+async def add_image_to_study(study_id: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+
+    image_filename = f"{uuid.uuid4()}.jpg"
+    image_path = f"/root/xray-pacs-system/data/images/{image_filename}"
+
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise HTTPException(status_code=400, detail="画像の読み込みに失敗しました")
+    cv2.imwrite(image_path, img)
+
+    image_record = Image(
+        study_id=study.id,
+        file_path=image_path,
+        ai_result=None,
+        ai_confidence=None
+    )
+    db.add(image_record)
+    db.commit()
+
+    return {"message": "画像を追加しました", "jpeg_file": image_filename}
 
 # ────────────────────────────
 # DICOM対応
