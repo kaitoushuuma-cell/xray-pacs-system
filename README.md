@@ -5,6 +5,16 @@
 
 ---
 
+## 🖥️ スクリーンショット
+
+### STEP 1 患者登録 / STEP 2 画像アップロード
+![STEP1-2](docs/screenshots/screenshot_step1_2.png)
+
+### STEP 3 検査一覧・AI診断・レポート作成
+![STEP3](docs/screenshots/screenshot_step3.png)
+
+---
+
 ## 📸 機能一覧
 
 | 機能 | 説明 |
