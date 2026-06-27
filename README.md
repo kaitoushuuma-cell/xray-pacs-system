@@ -25,7 +25,8 @@
 | 読影レポート | AI所見自動生成 + 医師コメント入力・保存 |
 | 画像ビューア | クリックで拡大表示（ライトボックス） |
 | ステータス管理 | 未読 / 既読 / AI診断済 / レポート済 |
-
+| 検査タイムライン | 患者ごとのAI診断履歴を時系列で表示 |
+| **PHR連携** | 生活習慣ログ（歩数・睡眠・食事・体重）と検査結果を横並び表示 |
 ---
 
 ## 🏗️ システム構成
@@ -209,3 +210,6 @@ python3 ~/xray-pacs-system/create_demo_images.py
 | DELETE | /reports/{id} | レポート削除 |
 | POST | /generate-report-text | AI所見テキスト自動生成 |
 | GET | /images/{filename} | 画像ファイル配信 |
+| GET | /patients/{id}/timeline | 患者の検査タイムライン取得 |
+| POST | /patients/{id}/lifelogs | 生活習慣ログ登録 |
+| GET | /patients/{id}/lifelogs | 生活習慣ログ一覧 |
