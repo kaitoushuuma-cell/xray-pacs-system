@@ -1,3 +1,4 @@
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = 'http://localhost:8000'
@@ -784,6 +785,24 @@ function App() {
                       <p style={{ color: '#92400e' }}>記録がありません</p>
                   ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {/* グラフ表示 */}
+                          {lifelogs.length > 1 && (
+                              <div style={{ marginBottom: '1rem' }}>
+                                  <p style={{ fontWeight: 'bold', color: '#92400e', margin: '0 0 0.5rem', fontSize: '0.88rem' }}>📈 トレンドグラフ</p>
+                                  <ResponsiveContainer width="100%" height={200}>
+                                      <LineChart data={lifelogs}>
+                                          <CartesianGrid strokeDasharray="3 3" />
+                                          <XAxis dataKey="record_date" tick={{ fontSize: 10 }} />
+                                          <YAxis tick={{ fontSize: 10 }} />
+                                          <Tooltip />
+                                          <Legend />
+                                          <Line type="monotone" dataKey="steps" stroke="#3b82f6" name="歩数" dot={true} />
+                                          <Line type="monotone" dataKey="sleep_hours" stroke="#8b5cf6" name="睡眠(h)" dot={true} />
+                                          <Line type="monotone" dataKey="weight" stroke="#f59e0b" name="体重(kg)" dot={true} />
+                                      </LineChart>
+                                  </ResponsiveContainer>
+                              </div>
+                          )}
                           {lifelogs.map(l => (
                               <div key={l.id} style={{ background: 'white', padding: '0.8rem', borderRadius: '6px', border: '1px solid #fde68a' }}>
                                   <p style={{ fontWeight: 'bold', margin: '0 0 0.3rem', color: '#92400e' }}>{l.record_date}</p>
