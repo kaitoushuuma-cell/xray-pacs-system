@@ -59,6 +59,19 @@ class Report(Base):
     radiologist    = Column(String)
     created_at     = Column(String)
 
+# 生活習慣テーブル
+class LifeLog(Base):
+    __tablename__ = "lifelogs"
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    patient_id  = Column(String, ForeignKey("patients.patient_id"))
+    record_date = Column(String)   # 記録日
+    steps       = Column(Integer)  # 歩数
+    sleep_hours = Column(Float)    # 睡眠時間
+    meal        = Column(String)   # 食事（良い/普通/悪い）
+    weight      = Column(Float)    # 体重
+    memo        = Column(String)   # メモ
+    created_at  = Column(String)
+
 # テーブル作成
 def init_db():
     Base.metadata.create_all(bind=engine)

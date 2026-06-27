@@ -150,6 +150,29 @@ def get_studies(db: Session = Depends(get_db)):
         for s in studies
     ]
 
+@app.get("/patients/{patient_id}/timeline")
+def get_patient_timeline(patient_id: str, db: Session = Depends(get_db)):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+    return {
+        "patient_id": patient.patient_id,
+        "patient_name": patient.name,
+        "studies": [
+            {
+                "study_id": s.study_id,
+                "study_date": s.study_date,
+                "modality": s.modality,
+                "status": s.status,
+                "ai_result": next((img.ai_result for img in reversed(s.images) if img.ai_result), None),
+                "ai_confidence": next((f"{img.ai_confidence*100:.1f}%" for img in reversed(s.images) if img.ai_confidence), None),
+                "jpeg_file": next((img.file_path.split("/")[-1] for img in reversed(s.images) if img.file_path), None),
+            }
+            for s in sorted(patient.studies, key=lambda x: x.study_date)
+        ]
+    }
+
+
 # 検査ステータス更新
 @app.patch("/studies/{study_id}/status")
 def update_study_status(study_id: str, status: str, db: Session = Depends(get_db)):
@@ -568,3 +591,50 @@ def get_image(filename: str):
     if not os.path.exists(image_path):
         raise HTTPException(status_code=404, detail="画像が見つかりません")
     return FileResponse(image_path, media_type="image/jpeg")
+
+# 生活習慣ログ登録
+@app.post("/patients/{patient_id}/lifelogs")
+def create_lifelog(
+    patient_id: str,
+    record_date: str,
+    steps: int = 0,
+    sleep_hours: float = 0,
+    meal: str = "普通",
+    weight: float = 0,
+    memo: str = "",
+    db: Session = Depends(get_db)
+):
+    from database import LifeLog
+    from datetime import datetime
+    log = LifeLog(
+        patient_id=patient_id,
+        record_date=record_date,
+        steps=steps,
+        sleep_hours=sleep_hours,
+        meal=meal,
+        weight=weight,
+        memo=memo,
+        created_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    )
+    db.add(log)
+    db.commit()
+    db.refresh(log)
+    return {"message": "記録しました", "id": log.id}
+
+# 生活習慣ログ一覧
+@app.get("/patients/{patient_id}/lifelogs")
+def get_lifelogs(patient_id: str, db: Session = Depends(get_db)):
+    from database import LifeLog
+    logs = db.query(LifeLog).filter(LifeLog.patient_id == patient_id).order_by(LifeLog.record_date).all()
+    return [
+        {
+            "id": l.id,
+            "record_date": l.record_date,
+            "steps": l.steps,
+            "sleep_hours": l.sleep_hours,
+            "meal": l.meal,
+            "weight": l.weight,
+            "memo": l.memo,
+        }
+        for l in logs
+    ]

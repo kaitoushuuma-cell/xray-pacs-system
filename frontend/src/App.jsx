@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -60,6 +60,16 @@ function App() {
   const [inlineStudyId, setInlineStudyId] = useState(null)
   const [inlineMode, setInlineMode]       = useState(null) // 'ai' | 'report'
   const [inlineStudy, setInlineStudy]     = useState(null)
+  const [timeline, setTimeline] = useState(null)
+  const [selectedPatientForTimeline, setSelectedPatientForTimeline] = useState(null)
+  const [lifelogs, setLifelogs] = useState([])
+  const [lifelogForm, setLifelogForm] = useState({
+      record_date: '', steps: '', sleep_hours: '', meal: '普通', weight: '', memo: ''
+  })
+  const [lifelogMessage, setLifelogMessage] = useState('')
+  const [showLifelogForm, setShowLifelogForm] = useState(false)
+
+
 
   useEffect(() => {
     fetchPatients(); fetchStudies(); fetchReports()
@@ -84,7 +94,36 @@ function App() {
     const res = await fetch(`${API_BASE}/reports`)
     setReports(await res.json())
   }
+  const fetchTimeline = async (patient_id) => {
+      const res = await fetch(`${API_BASE}/patients/${patient_id}/timeline`)
+      const data = await res.json()
+      setTimeline(data)
+      fetchLifelogs(patient_id)  // ← これを追加
+  }
+  const fetchLifelogs = async (patient_id) => {
+    const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs`)
+    const data = await res.json()
+    setLifelogs(data)
+  }
 
+  const handleCreateLifelog = async (patient_id) => {
+      const params = new URLSearchParams({
+          record_date: lifelogForm.record_date,
+          steps: lifelogForm.steps,
+          sleep_hours: lifelogForm.sleep_hours,
+          meal: lifelogForm.meal,
+          weight: lifelogForm.weight,
+          memo: lifelogForm.memo
+      })
+      const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs?${params}`, {
+          method: 'POST'
+      })
+      if (res.ok) {
+          setLifelogMessage('記録しました！')
+          fetchLifelogs(patient_id)
+          setShowLifelogForm(false)
+      }
+  }
   // ── 患者登録 ───────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!name || !birthdate) { setMessage('名前と生年月日を入力してください'); return }
@@ -312,13 +351,17 @@ function App() {
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '980px', margin: '0 auto' }}>
 
-      {/* ヘッダー */}
-      <div style={{ marginBottom: '2rem', paddingBottom: '1rem', borderBottom: '3px solid #3b82f6' }}>
-        <h1 style={{ margin: 0, fontSize: '1.8rem' }}>🏥 XRAY PACS System</h1>
-        <p style={{ color: '#64748b', margin: '0.4rem 0 0', fontSize: '0.95rem' }}>
-          患者登録 → 画像アップロード → AI診断 → レポート作成　の一気通貫ワークフロー
-        </p>
-      </div>
+    {/* ヘッダー */}
+    <div style={{ marginBottom: '2rem', paddingBottom: '1rem', borderBottom: '3px solid #3b82f6' }}>
+      <h1 style={{ margin: 0, fontSize: '1.8rem' }}>🏥 XRAY PACS System</h1>
+      <p style={{ color: '#64748b', margin: '0.4rem 0 0', fontSize: '0.95rem' }}>
+        患者登録 → 画像アップロード → AI診断 → レポート作成　の一気通貫ワークフロー
+      </p>
+      {/* ここだけ追加 */}
+      <p style={{ color: '#3b82f6', marginTop: '0.5rem' }}>
+        患者 {patients.length}名 ／ 検査 {studies.length}件 ／ レポート {reports.length}件
+      </p>
+    </div>
 
       {/* ライトボックス */}
       {zoomedImage && (
@@ -468,8 +511,8 @@ function App() {
               </thead>
               <tbody>
                 {studies.filter(s => statusFilter === '全て' || s.status === statusFilter).map(s => (
-                  <>
-                    <tr key={s.study_id} style={{ background: inlineStudyId === s.study_id ? '#f5f3ff' : 'white' }}>
+                  <React.Fragment key={s.study_id}>
+                    <tr  style={{ background: inlineStudyId === s.study_id ? '#f5f3ff' : 'white' }}>
                       <td style={{ padding: '0.6rem', border: '1px solid #ede9fe', fontWeight: '500' }}>{s.patient_name}</td>
                       <td style={{ padding: '0.6rem', border: '1px solid #ede9fe', textAlign: 'center' }}>{s.modality}</td>
                       <td style={{ padding: '0.6rem', border: '1px solid #ede9fe', textAlign: 'center', fontSize: '0.88rem' }}>{fmtDate(s.study_date)}</td>
@@ -506,7 +549,7 @@ function App() {
                     {inlineStudyId === s.study_id && inlineMode === 'report' && (
                       <tr key={`report-${s.study_id}`}><ReportPanel s={s} /></tr>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -562,15 +605,16 @@ function App() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f1f5f9' }}>
-                {['ID', '患者名', '生年月日', '性別', '検査履歴', ''].map(h => (
+                {['ID', '患者名', '生年月日', '性別', '検査履歴', 'タイムライン', ''].map(h => (
                   <th key={h} style={{ padding: '0.6rem', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {patients.map(p => (
-                <>
-                  <tr key={p.id}>
+ 
+                <React.Fragment key={p.id}>
+                  <tr>
                     <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center', color: '#94a3b8', fontSize: '0.82rem' }}>{p.id}</td>
                     <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', fontWeight: 'bold' }}>{p.name}</td>
                     <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}>{p.birth_date}</td>
@@ -580,6 +624,14 @@ function App() {
                         style={{ padding: '0.3rem 0.7rem', background: expandedPatientId === p.patient_id ? '#64748b' : '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}>
                         {expandedPatientId === p.patient_id ? '閉じる' : '🔍 検査を見る'}
                       </button>
+                    </td>
+                    <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center' }}>
+                        <button
+                            onClick={() => fetchTimeline(p.patient_id)}
+                            style={{ padding: '0.3rem 0.7rem', background: '#7c3aed', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}
+                        >
+                            📅 タイムライン
+                        </button>
                     </td>
                     <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center' }}>
                       <button onClick={() => handleDeletePatient(p.patient_id)}
@@ -631,12 +683,127 @@ function App() {
                       </td>
                     </tr>
                   )}
-                </>
+                </React.Fragment>
               ))}
+
             </tbody>
           </table>
         )}
       </div>
+
+      {/* ── タイムライン＋生活習慣ログ 横並び ── */}
+      {timeline && (
+          <div style={{ marginTop: '2rem', display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
+
+              {/* 左：検査タイムライン */}
+              <div style={{ flex: '1 1 300px', background: '#f8fafc', padding: '1.5rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <h2 style={{ margin: '0 0 1rem' }}>📅 検査タイムライン</h2>
+                  <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: '1.5rem' }}>
+                      {timeline.studies.map((s, index) => (
+                          <div key={s.study_id} style={{ marginBottom: '1.5rem', position: 'relative' }}>
+                              <div style={{
+                                  position: 'absolute', left: '-1.9rem', top: '0.3rem',
+                                  width: '14px', height: '14px', borderRadius: '50%',
+                                  background: s.ai_result === '肺炎' ? '#dc2626' : s.ai_result === '正常' ? '#16a34a' : '#94a3b8'
+                              }} />
+                              <div style={{
+                                  background: 'white', padding: '1rem', borderRadius: '8px',
+                                  border: `2px solid ${s.ai_result === '肺炎' ? '#dc2626' : s.ai_result === '正常' ? '#16a34a' : '#e2e8f0'}`
+                              }}>
+                                  <p style={{ fontWeight: 'bold', margin: '0 0 0.3rem' }}>
+                                      #{index + 1} {s.study_date?.split('T')[0]}
+                                  </p>
+                                  <p style={{ margin: '0.2rem 0', color: '#64748b', fontSize: '0.88rem' }}>
+                                      モダリティ：{s.modality} ／ ステータス：{s.status}
+                                  </p>
+                                  {s.ai_result ? (
+                                      <p style={{ margin: 0, color: s.ai_result === '肺炎' ? '#dc2626' : '#16a34a', fontWeight: 'bold' }}>
+                                          {s.ai_result === '肺炎' ? '⚠️' : '✅'} AI診断：{s.ai_result}（{s.ai_confidence}）
+                                      </p>
+                                  ) : (
+                                      <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.88rem' }}>AI診断：未実施</p>
+                                  )}
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              </div>
+
+              {/* 右：生活習慣ログ */}
+              <div style={{ flex: '1 1 300px', background: '#fefce8', padding: '1.5rem', borderRadius: '8px', border: '1px solid #fde68a' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                      <h2 style={{ margin: 0 }}>🏃 生活習慣ログ</h2>
+                      <button
+                          onClick={() => setShowLifelogForm(!showLifelogForm)}
+                          style={{ padding: '0.5rem 1rem', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem' }}
+                      >
+                          ＋ 記録を追加
+                      </button>
+                  </div>
+
+                  {showLifelogForm && (
+                      <div style={{ background: 'white', padding: '1rem', borderRadius: '8px', marginBottom: '1rem', border: '1px solid #fde68a' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              <input type="date" value={lifelogForm.record_date}
+                                  onChange={e => setLifelogForm({...lifelogForm, record_date: e.target.value})}
+                                  style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1' }} />
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                  <input type="number" placeholder="歩数" value={lifelogForm.steps}
+                                      onChange={e => setLifelogForm({...lifelogForm, steps: e.target.value})}
+                                      style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', flex: 1 }} />
+                                  <input type="number" placeholder="睡眠(h)" value={lifelogForm.sleep_hours}
+                                      onChange={e => setLifelogForm({...lifelogForm, sleep_hours: e.target.value})}
+                                      style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', flex: 1 }} />
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                  <select value={lifelogForm.meal}
+                                      onChange={e => setLifelogForm({...lifelogForm, meal: e.target.value})}
+                                      style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', flex: 1 }}>
+                                      <option value="良い">食事：良い</option>
+                                      <option value="普通">食事：普通</option>
+                                      <option value="悪い">食事：悪い</option>
+                                  </select>
+                                  <input type="number" placeholder="体重(kg)" value={lifelogForm.weight}
+                                      onChange={e => setLifelogForm({...lifelogForm, weight: e.target.value})}
+                                      style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1', flex: 1 }} />
+                              </div>
+                              <input placeholder="メモ" value={lifelogForm.memo}
+                                  onChange={e => setLifelogForm({...lifelogForm, memo: e.target.value})}
+                                  style={{ padding: '0.4rem', borderRadius: '4px', border: '1px solid #cbd5e1' }} />
+                              <button
+                                  onClick={() => handleCreateLifelog(timeline.patient_id)}
+                                  style={{ padding: '0.5rem', background: '#059669', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                                  保存
+                              </button>
+                              {lifelogMessage && <p style={{ color: '#16a34a', margin: 0, fontSize: '0.88rem' }}>{lifelogMessage}</p>}
+                          </div>
+                      </div>
+                  )}
+
+                  {lifelogs.length === 0 ? (
+                      <p style={{ color: '#92400e' }}>記録がありません</p>
+                  ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                          {lifelogs.map(l => (
+                              <div key={l.id} style={{ background: 'white', padding: '0.8rem', borderRadius: '6px', border: '1px solid #fde68a' }}>
+                                  <p style={{ fontWeight: 'bold', margin: '0 0 0.3rem', color: '#92400e' }}>{l.record_date}</p>
+                                  <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.85rem', color: '#64748b' }}>
+                                      <span>👟 {l.steps}歩</span>
+                                      <span>😴 {l.sleep_hours}h</span>
+                                      <span style={{ color: l.meal === '良い' ? '#16a34a' : l.meal === '悪い' ? '#dc2626' : '#64748b' }}>
+                                          🍽️ {l.meal}
+                                      </span>
+                                      <span>⚖️ {l.weight}kg</span>
+                                      {l.memo && <span>📝 {l.memo}</span>}
+                                  </div>
+                              </div>
+                          ))}
+                      </div>
+                  )}
+              </div>
+          </div>
+      )}
+    
     </div>
   )
 }
