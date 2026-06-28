@@ -1,5 +1,6 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import React, { useState, useEffect, useCallback, useRef } from 'react'
+import jsPDF from 'jspdf'
 
 const API_BASE = 'http://localhost:8000'
 
@@ -69,7 +70,7 @@ function App() {
   })
   const [lifelogMessage, setLifelogMessage] = useState('')
   const [showLifelogForm, setShowLifelogForm] = useState(false)
-
+  const [searchQuery, setSearchQuery] = useState('')
 
 
   useEffect(() => {
@@ -100,6 +101,20 @@ function App() {
       const data = await res.json()
       setTimeline(data)
       fetchLifelogs(patient_id)  // ← これを追加
+  }
+    // 異常傾向を検出する関数
+  const detectAlert = (studies) => {
+      const diagnosed = studies.filter(s => s.ai_result)
+      for (let i = 1; i < diagnosed.length; i++) {
+          if (diagnosed[i - 1].ai_result === '正常' && diagnosed[i].ai_result === '肺炎') {
+              return {
+                  detected: true,
+                  from: diagnosed[i - 1].study_date?.split('T')[0],
+                  to: diagnosed[i].study_date?.split('T')[0],
+              }
+          }
+      }
+      return { detected: false }
   }
   const fetchLifelogs = async (patient_id) => {
     const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs`)
@@ -151,6 +166,60 @@ function App() {
     if (!window.confirm('このレポートを削除しますか？')) return
     const res = await fetch(`${API_BASE}/reports/${report_id}`, { method: 'DELETE' })
     if (res.ok) fetchReports()
+  }
+
+  const handleExportPDF = (r) => {
+      const doc = new jsPDF()
+      doc.setFont('helvetica')
+      
+      // タイトル
+      doc.setFontSize(18)
+      doc.text('Radiology Report', 20, 20)
+      
+      // 区切り線
+      doc.setLineWidth(0.5)
+      doc.line(20, 25, 190, 25)
+      
+      // 患者情報
+      doc.setFontSize(12)
+      doc.text(`Patient: ${r.patient_name}`, 20, 35)
+      doc.text(`Study Date: ${r.study_date}`, 20, 55)
+      doc.text(`Created: ${r.created_at}`, 20, 65)
+
+      // モダリティ（日本語を英語に変換）
+      const modalityMap = { '不明': 'Unknown' }
+      const modalityEn = modalityMap[r.modality] || r.modality
+      doc.text(`Modality: ${modalityEn}`, 20, 45)
+      
+      // AI診断（英語に変換）
+      const aiResultEn = r.ai_result === '正常' ? 'Normal' 
+          : r.ai_result === '肺炎' ? 'Pneumonia' 
+          : r.ai_result === '未実施' ? 'Not performed'
+          : r.ai_result
+      
+      // 区切り線
+      doc.line(20, 87, 190, 87)
+      
+      // 所見（英語のみ）
+      doc.setFontSize(11)
+      doc.text('Findings:', 20, 97)
+      const findingsText = r.findings ? r.findings.replace(/[^\x00-\x7F]/g, '?') : '-'
+      const findings = doc.splitTextToSize(findingsText, 170)
+      doc.text(findings, 20, 107)
+      
+      // 結論
+      doc.text('Conclusion:', 20, 130)
+      const conclusionText = r.conclusion ? r.conclusion.replace(/[^\x00-\x7F]/g, '?') : '-'
+      const conclusion = doc.splitTextToSize(conclusionText, 170)
+      doc.text(conclusion, 20, 140)
+      
+      // 読影医
+      doc.line(20, 160, 190, 160)
+      const radiologistText = r.radiologist ? r.radiologist.replace(/[^\x00-\x7F]/g, '?') : '-'
+      doc.text(`Radiologist: ${radiologistText}`, 20, 170)
+      
+      // 保存
+      doc.save(`report_${r.patient_name}_${r.study_date}.pdf`)
   }
 
   // ── 一般画像アップロード ───────────────────────────────────────
@@ -364,6 +433,87 @@ function App() {
       </p>
     </div>
 
+    {/* ── ダッシュボード ── */}
+    {(() => {
+        const diagnosed = studies.filter(s => s.ai_result)
+        const normal = diagnosed.filter(s => s.ai_result === '正常').length
+        const pneumonia = diagnosed.filter(s => s.ai_result === '肺炎').length
+        const undiagnosed = studies.length - diagnosed.length
+        const pieData = [
+            { name: '正常', value: normal, color: '#16a34a' },
+            { name: '肺炎', value: pneumonia, color: '#dc2626' },
+            { name: '未診断', value: undiagnosed, color: '#94a3b8' },
+        ].filter(d => d.value > 0)
+        return (
+            <div style={{ background: '#f8fafc', padding: '1.5rem', borderRadius: '8px', marginBottom: '2rem', border: '1px solid #e2e8f0' }}>
+                <h2 style={{ margin: '0 0 1rem', fontSize: '1.1rem', color: '#475569' }}>📊 AI診断ダッシュボード</h2>
+                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {/* 統計カード */}
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={{ background: '#dcfce7', padding: '1rem 1.5rem', borderRadius: '8px', textAlign: 'center', minWidth: '100px' }}>
+                            <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#16a34a' }}>{normal}</p>
+                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#166534' }}>✅ 正常</p>
+                        </div>
+                        <div style={{ background: '#fee2e2', padding: '1rem 1.5rem', borderRadius: '8px', textAlign: 'center', minWidth: '100px' }}>
+                            <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#dc2626' }}>{pneumonia}</p>
+                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#991b1b' }}>⚠️ 肺炎</p>
+                        </div>
+                        <div style={{ background: '#f1f5f9', padding: '1rem 1.5rem', borderRadius: '8px', textAlign: 'center', minWidth: '100px' }}>
+                            <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#64748b' }}>{undiagnosed}</p>
+                            <p style={{ margin: 0, fontSize: '0.85rem', color: '#475569' }}>🔲 未診断</p>
+                        </div>
+                        {pneumonia > 0 && (
+                            <div style={{ background: '#fef3c7', padding: '1rem 1.5rem', borderRadius: '8px', textAlign: 'center', minWidth: '100px' }}>
+                                <p style={{ margin: 0, fontSize: '2rem', fontWeight: 'bold', color: '#d97706' }}>
+                                    {Math.round(pneumonia / diagnosed.length * 100)}%
+                                </p>
+                                <p style={{ margin: 0, fontSize: '0.85rem', color: '#92400e' }}>📈 肺炎率</p>
+                            </div>
+                        )}
+                    </div>
+                    {/* 円グラフ */}
+                    {pieData.length > 0 && (
+                        <PieChart width={160} height={160}>
+                            <Pie data={pieData} cx={75} cy={75} innerRadius={40} outerRadius={70} dataKey="value">
+                                {pieData.map((entry, index) => (
+                                    <Cell key={index} fill={entry.color} />
+                                ))}
+                            </Pie>
+                            <Tooltip formatter={(value, name) => [value + '件', name]} />
+                        </PieChart>
+                    )}
+                </div>
+            </div>
+        )
+      })()}
+
+      {/* 月別推移グラフ */}
+      {(() => {
+          const monthlyData = {}
+          studies.filter(s => s.ai_result).forEach(s => {
+              const month = s.study_date?.split('T')[0]?.slice(0, 7) || '不明'
+              if (!monthlyData[month]) monthlyData[month] = { month, 正常: 0, 肺炎: 0 }
+              monthlyData[month][s.ai_result]++
+          })
+          const chartData = Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month))
+          return chartData.length > 0 ? (
+              <div style={{ marginTop: '1rem' }}>
+                  <p style={{ fontWeight: 'bold', color: '#475569', margin: '0 0 0.5rem', fontSize: '0.88rem' }}>📈 月別AI診断推移</p>
+                  <ResponsiveContainer width="100%" height={200}>
+                      <LineChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                          <YAxis tick={{ fontSize: 10 }} />
+                          <Tooltip />
+                          <Legend />
+                          <Line type="monotone" dataKey="正常" stroke="#16a34a" name="正常" dot={true} strokeWidth={2} />
+                          <Line type="monotone" dataKey="肺炎" stroke="#dc2626" name="肺炎" dot={true} strokeWidth={2} />
+                      </LineChart>
+                  </ResponsiveContainer>
+              </div>
+          ) : null
+      })()}
+
       {/* ライトボックス */}
       {zoomedImage && (
         <div onClick={() => setZoomedImage(null)}
@@ -417,7 +567,9 @@ function App() {
           <select value={selectedPatientId} onChange={e => setSelectedPatientId(e.target.value)}
             style={{ padding: '0.5rem', fontSize: '1rem', borderRadius: '4px', border: '1px solid #cbd5e1' }}>
             <option value="">患者を選択してください</option>
-            {patients.map(p => (
+            {patients
+              .filter(p => p.name && p.name.includes(searchQuery))
+              .map(p => (
               <option key={p.patient_id} value={p.patient_id}>{p.name}（{p.patient_id}）</option>
             ))}
           </select>
@@ -568,7 +720,7 @@ function App() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
               <thead>
                 <tr style={{ background: '#dcfce7' }}>
-                  {['患者名', 'モダリティ', 'AI診断', '所見', '結論', '読影医', '作成日時', ''].map(h => (
+                  {['患者名', 'モダリティ', 'AI診断', '所見', '結論', '読影医', '作成日時', '操作'].map(h => (
                     <th key={h} style={{ padding: '0.6rem 0.8rem', border: '1px solid #86efac', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -586,10 +738,14 @@ function App() {
                     <td style={{ padding: '0.6rem 0.8rem', border: '1px solid #e2e8f0', whiteSpace: 'nowrap' }}>{r.radiologist}</td>
                     <td style={{ padding: '0.6rem 0.8rem', border: '1px solid #e2e8f0', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>{r.created_at}</td>
                     <td style={{ padding: '0.6rem 0.8rem', border: '1px solid #e2e8f0', textAlign: 'center' }}>
-                      <button onClick={() => handleDeleteReport(r.id)}
-                        style={{ padding: '0.2rem 0.5rem', background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem' }}>
-                        🗑️ 削除
-                      </button>
+                        <button onClick={() => handleExportPDF(r)}
+                            style={{ padding: '0.2rem 0.5rem', background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem', marginRight: '0.3rem' }}>
+                            📄 PDF
+                        </button>
+                        <button onClick={() => handleDeleteReport(r.id)}
+                            style={{ padding: '0.2rem 0.5rem', background: '#fee2e2', color: '#dc2626', border: '1px solid #fca5a5', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                            🗑️ 削除
+                        </button>
                     </td>
                   </tr>
                 ))}
@@ -602,6 +758,12 @@ function App() {
       {/* ── 患者一覧（参照パネル）── */}
       <div style={{ marginBottom: '2rem', borderLeft: '4px solid #94a3b8', paddingLeft: '1rem' }}>
         <h2 style={{ color: '#475569', fontSize: '1.1rem', marginBottom: '0.8rem' }}>📁 患者一覧</h2>
+        <input
+              placeholder="🔍 患者名で検索..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ padding: '0.5rem', borderRadius: '4px', border: '1px solid #cbd5e1', marginBottom: '0.8rem', width: '250px', fontSize: '0.95rem' }}
+        />
         {loading ? <p>読み込み中...</p> : patients.length === 0 ? <p style={{ color: '#94a3b8' }}>患者データがありません</p> : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -612,7 +774,9 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {patients.map(p => (
+              {patients
+                .filter(p => p.name && p.name.includes(searchQuery))
+                .map(p => (
  
                 <React.Fragment key={p.id}>
                   <tr>
@@ -699,6 +863,20 @@ function App() {
               {/* 左：検査タイムライン */}
               <div style={{ flex: '1 1 300px', background: '#f8fafc', padding: '1.5rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                   <h2 style={{ margin: '0 0 1rem' }}>📅 検査タイムライン</h2>
+                    {/* 異常傾向アラート */}
+                    {(() => {
+                        const alert = detectAlert(timeline.studies)
+                        return alert.detected ? (
+                            <div style={{ background: '#fee2e2', border: '2px solid #dc2626', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+                                <p style={{ color: '#dc2626', fontWeight: 'bold', margin: '0 0 0.3rem', fontSize: '1rem' }}>
+                                    ⚠️ 異常傾向を検出！
+                                </p>
+                                <p style={{ color: '#991b1b', margin: 0, fontSize: '0.88rem' }}>
+                                    {alert.from} に正常と診断されましたが、{alert.to} に肺炎と診断されました。早期の対応を推奨します。
+                                </p>
+                            </div>
+                        ) : null
+                    })()}
                   <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: '1.5rem' }}>
                       {timeline.studies.map((s, index) => (
                           <div key={s.study_id} style={{ marginBottom: '1.5rem', position: 'relative' }}>
