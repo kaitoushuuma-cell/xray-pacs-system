@@ -70,7 +70,9 @@ def get_patients(db: Session = Depends(get_db)):
             "name": p.name,
             "birth_date": p.birth_date,
             "gender": p.gender,
-            "created_at": p.created_at
+            "created_at": p.created_at,
+            "remission_mode": p.remission_mode or 0,
+            "cancer_flag": p.cancer_flag or 0
         }
         for p in patients
     ]
@@ -638,3 +640,113 @@ def get_lifelogs(patient_id: str, db: Session = Depends(get_db)):
         }
         for l in logs
     ]
+
+# 寛解後モード切替
+@app.patch("/patients/{patient_id}/remission")
+def toggle_remission(patient_id: str, mode: int, db: Session = Depends(get_db)):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    patient.remission_mode = mode
+    db.commit()
+    return {"patient_id": patient_id, "remission_mode": mode}
+
+# がんフラグ切替
+@app.patch("/patients/{patient_id}/cancer-flag")
+def toggle_cancer_flag(patient_id: str, flag: int, db: Session = Depends(get_db)):
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    patient.cancer_flag = flag
+    db.commit()
+    return {"patient_id": patient_id, "cancer_flag": flag}
+
+# グループ別生活習慣平均
+@app.get("/lifelogs/group-comparison")
+def get_group_comparison(db: Session = Depends(get_db)):
+    from database import LifeLog
+    
+    cancer_patients = db.query(Patient).filter(Patient.cancer_flag == 1).all()
+    healthy_patients = db.query(Patient).filter(Patient.cancer_flag == 0).all()
+    
+    def calc_avg(patient_list):
+        ids = [p.patient_id for p in patient_list]
+        logs = db.query(LifeLog).filter(LifeLog.patient_id.in_(ids)).all()
+        if not logs:
+            return {"steps": 0, "sleep_hours": 0, "weight": 0, "count": 0}
+        return {
+            "steps": round(sum(l.steps or 0 for l in logs) / len(logs), 1),
+            "sleep_hours": round(sum(l.sleep_hours or 0 for l in logs) / len(logs), 1),
+            "weight": round(sum(l.weight or 0 for l in logs) / len(logs), 1),
+            "count": len(logs)
+        }
+    
+    return {
+        "cancer": calc_avg(cancer_patients),
+        "healthy": calc_avg(healthy_patients)
+    }
+
+# 患者リスクスコア計算
+@app.get("/patients/{patient_id}/risk-score")
+def get_risk_score(patient_id: str, db: Session = Depends(get_db)):
+    from database import LifeLog
+    
+    logs = db.query(LifeLog).filter(LifeLog.patient_id == patient_id).all()
+    if not logs:
+        return {"score": None, "message": "生活習慣データが不足しています", "details": []}
+    
+    score = 100
+    details = []
+    
+    avg_steps = sum(l.steps or 0 for l in logs) / len(logs)
+    avg_sleep = sum(l.sleep_hours or 0 for l in logs) / len(logs)
+    avg_weight = sum(l.weight or 0 for l in logs) / len(logs)
+    
+    # 歩数評価
+    if avg_steps < 3000:
+        score -= 30
+        details.append({"item": "歩数", "status": "⚠️ 少ない", "value": f"{avg_steps:.0f}歩/日", "color": "#dc2626"})
+    elif avg_steps < 6000:
+        score -= 10
+        details.append({"item": "歩数", "status": "△ やや少ない", "value": f"{avg_steps:.0f}歩/日", "color": "#d97706"})
+    else:
+        details.append({"item": "歩数", "status": "✅ 良好", "value": f"{avg_steps:.0f}歩/日", "color": "#16a34a"})
+    
+    # 睡眠評価
+    if avg_sleep < 5:
+        score -= 30
+        details.append({"item": "睡眠", "status": "⚠️ 不足", "value": f"{avg_sleep:.1f}h/日", "color": "#dc2626"})
+    elif avg_sleep < 7:
+        score -= 10
+        details.append({"item": "睡眠", "status": "△ やや不足", "value": f"{avg_sleep:.1f}h/日", "color": "#d97706"})
+    else:
+        details.append({"item": "睡眠", "status": "✅ 良好", "value": f"{avg_sleep:.1f}h/日", "color": "#16a34a"})
+    
+    # 体重評価
+    if avg_weight > 80:
+        score -= 20
+        details.append({"item": "体重", "status": "⚠️ 高め", "value": f"{avg_weight:.1f}kg", "color": "#dc2626"})
+    elif avg_weight > 70:
+        score -= 10
+        details.append({"item": "体重", "status": "△ やや高め", "value": f"{avg_weight:.1f}kg", "color": "#d97706"})
+    else:
+        details.append({"item": "体重", "status": "✅ 良好", "value": f"{avg_weight:.1f}kg", "color": "#16a34a"})
+    
+    # リスクレベル判定
+    if score >= 80:
+        level = "低リスク"
+        level_color = "#16a34a"
+    elif score >= 60:
+        level = "中リスク"
+        level_color = "#d97706"
+    else:
+        level = "高リスク"
+        level_color = "#dc2626"
+    
+    return {
+        "score": score,
+        "level": level,
+        "level_color": level_color,
+        "message": f"生活習慣データ {len(logs)}件をもとに算出",
+        "details": details
+    }

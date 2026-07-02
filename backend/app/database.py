@@ -19,6 +19,10 @@ class Patient(Base):
     gender      = Column(String)                            # 性別
     created_at  = Column(DateTime, default=datetime.now)
     studies     = relationship("Study", back_populates="patient")
+    cancer_flag = Column(Integer, default=0)  # 0: がんなし, 1: がんあり
+    studies     = relationship("Study", back_populates="patient")
+    cancer_flag = Column(Integer, default=0)  # 0: がんなし, 1: がんあり
+    remission_mode = Column(Integer, default=0)  # 0: 通常, 1: 寛解後
 
 # 検査テーブル
 class Study(Base):

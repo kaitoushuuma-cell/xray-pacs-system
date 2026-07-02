@@ -1,6 +1,7 @@
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar } from 'recharts'
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import jsPDF from 'jspdf'
+
 
 const API_BASE = 'http://localhost:8000'
 
@@ -71,6 +72,8 @@ function App() {
   const [lifelogMessage, setLifelogMessage] = useState('')
   const [showLifelogForm, setShowLifelogForm] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [groupComparison, setGroupComparison] = useState(false)
+  const [riskScore, setRiskScore] = useState(null)
 
 
   useEffect(() => {
@@ -100,7 +103,11 @@ function App() {
       const res = await fetch(`${API_BASE}/patients/${patient_id}/timeline`)
       const data = await res.json()
       setTimeline(data)
-      fetchLifelogs(patient_id)  // ← これを追加
+      fetchLifelogs(patient_id)
+      // リスクスコアも取得
+      const riskRes = await fetch(`${API_BASE}/patients/${patient_id}/risk-score`)
+      const riskData = await riskRes.json()
+      setRiskScore(riskData)
   }
     // 異常傾向を検出する関数
   const detectAlert = (studies) => {
@@ -140,6 +147,19 @@ function App() {
           setShowLifelogForm(false)
       }
   }
+
+  const toggleCancerFlag = async (patient_id, currentFlag) => {
+    const newFlag = currentFlag ? 0 : 1
+    await fetch(`${API_BASE}/patients/${patient_id}/cancer-flag?flag=${newFlag}`, { method: 'PATCH' })
+    fetchPatients()
+}
+
+const toggleRemissionMode = async (patient_id, currentMode) => {
+    const newMode = currentMode ? 0 : 1
+    await fetch(`${API_BASE}/patients/${patient_id}/remission?mode=${newMode}`, { method: 'PATCH' })
+    fetchPatients()
+}
+
   // ── 患者登録 ───────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (!name || !birthdate) { setMessage('名前と生年月日を入力してください'); return }
@@ -514,6 +534,82 @@ function App() {
           ) : null
       })()}
 
+      {/* 患者登録数推移グラフ */}
+      {(() => {
+          const monthlyPatients = {}
+          patients.forEach(p => {
+              const month = p.created_at?.slice(0, 7) || '不明'
+              if (!monthlyPatients[month]) monthlyPatients[month] = { month, 登録数: 0 }
+              monthlyPatients[month].登録数++
+          })
+          const chartData = Object.values(monthlyPatients).sort((a, b) => a.month.localeCompare(b.month))
+          return chartData.length > 0 ? (
+              <div style={{ marginTop: '1rem' }}>
+                  <p style={{ fontWeight: 'bold', color: '#475569', margin: '0 0 0.5rem', fontSize: '0.88rem' }}>👥 月別患者登録数</p>
+                  <ResponsiveContainer width="100%" height={180}>
+                      <LineChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                          <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="登録数" stroke="#3b82f6" name="登録数" dot={true} strokeWidth={2} />
+                      </LineChart>
+                  </ResponsiveContainer>
+              </div>
+          ) : null
+      })()}
+
+      {/* がんあり/なし 生活習慣比較 */}
+      {(() => {
+          const cancerPatients = patients.filter(p => p.cancer_flag === 1)
+          const healthyPatients = patients.filter(p => p.cancer_flag === 0)
+          return (
+              <div style={{ marginTop: '1.5rem', background: '#fdf2f8', padding: '1rem', borderRadius: '8px', border: '1px solid #fbcfe8' }}>
+                  <p style={{ fontWeight: 'bold', color: '#9d174d', margin: '0 0 0.5rem', fontSize: '0.88rem' }}>
+                      🔬 がんあり/なし患者グループ
+                  </p>
+                  <p style={{ color: '#64748b', fontSize: '0.82rem', margin: '0 0 0.8rem' }}>
+                      🔴 がんあり：{cancerPatients.length}名　／　⚪ がんなし：{healthyPatients.length}名
+                  </p>
+                  <button
+                      onClick={() => setGroupComparison(!groupComparison)}
+                      style={{ padding: '0.5rem 1rem', background: '#be185d', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                      {groupComparison ? '比較を閉じる' : '📊 生活習慣を比較する'}
+                  </button>
+              </div>
+          )
+      })()}
+      
+        {groupComparison && (
+            <div style={{ marginTop: '1rem', background: 'white', padding: '1rem', borderRadius: '8px', border: '1px solid #fbcfe8' }}>
+                <p style={{ fontWeight: 'bold', color: '#9d174d', margin: '0 0 1rem', fontSize: '0.9rem' }}>
+                    📊 グループ別生活習慣比較（平均値）
+                </p>
+                {(() => {
+                    const cancerIds = patients.filter(p => p.cancer_flag === 1).map(p => p.patient_id)
+                    const healthyIds = patients.filter(p => p.cancer_flag === 0).map(p => p.patient_id)
+                    // ※ 現在lifelogsは選択中患者のみ。全患者分は別途APIが必要。
+                    // まずはグループ人数と「データ収集中」の表示を出す
+                    return (
+                        <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                            <div style={{ flex: 1, background: '#fee2e2', padding: '1rem', borderRadius: '8px', minWidth: '200px' }}>
+                                <p style={{ fontWeight: 'bold', color: '#dc2626', margin: '0 0 0.5rem' }}>🔴 がんあり（{cancerIds.length}名）</p>
+                                <p style={{ color: '#64748b', fontSize: '0.82rem', margin: 0 }}>
+                                    対象患者：{patients.filter(p => p.cancer_flag === 1).map(p => p.name).join('、') || 'なし'}
+                                </p>
+                            </div>
+                            <div style={{ flex: 1, background: '#f0fdf4', padding: '1rem', borderRadius: '8px', minWidth: '200px' }}>
+                                <p style={{ fontWeight: 'bold', color: '#16a34a', margin: '0 0 0.5rem' }}>⚪ がんなし（{healthyIds.length}名）</p>
+                                <p style={{ color: '#64748b', fontSize: '0.82rem', margin: 0 }}>
+                                    対象患者：{patients.filter(p => p.cancer_flag === 0).map(p => p.name).join('、') || 'なし'}
+                                </p>
+                            </div>
+                        </div>
+                    )
+                })()}
+            </div>
+          )}
+
       {/* ライトボックス */}
       {zoomedImage && (
         <div onClick={() => setZoomedImage(null)}
@@ -720,7 +816,7 @@ function App() {
             <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '700px' }}>
               <thead>
                 <tr style={{ background: '#dcfce7' }}>
-                  {['患者名', 'モダリティ', 'AI診断', '所見', '結論', '読影医', '作成日時', '操作'].map(h => (
+                  {['ID', '患者名', '生年月日', '性別', '検査履歴', 'タイムライン', 'がんフラグ', '寛解後', ''].map(h => (
                     <th key={h} style={{ padding: '0.6rem 0.8rem', border: '1px solid #86efac', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
@@ -768,7 +864,7 @@ function App() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f1f5f9' }}>
-                {['ID', '患者名', '生年月日', '性別', '検査履歴', 'タイムライン', ''].map(h => (
+                {['ID', '患者名', '生年月日', '性別', 'がんフラグ', '検査履歴', 'タイムライン', ''].map(h => (
                   <th key={h} style={{ padding: '0.6rem', border: '1px solid #cbd5e1', fontSize: '0.85rem' }}>{h}</th>
                 ))}
               </tr>
@@ -797,6 +893,18 @@ function App() {
                         >
                             📅 タイムライン
                         </button>
+                    </td>
+                    <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center' }}>
+                        <button onClick={() => toggleCancerFlag(p.patient_id, p.cancer_flag)}
+                            style={{ padding: '0.3rem 0.7rem', background: p.cancer_flag ? '#dc2626' : '#e2e8f0', color: p.cancer_flag ? 'white' : '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                            {p.cancer_flag ? '🔴 がんあり' : '⚪ がんなし'}
+                        </button>
+                    <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center' }}>
+                        <button onClick={() => toggleRemissionMode(p.patient_id, p.remission_mode)}
+                            style={{ padding: '0.3rem 0.7rem', background: p.remission_mode ? '#7c3aed' : '#e2e8f0', color: p.remission_mode ? 'white' : '#475569', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.78rem' }}>
+                            {p.remission_mode ? '🟣 寛解後' : '⚪ 通常'}
+                        </button>
+                    </td>
                     </td>
                     <td style={{ padding: '0.6rem', border: '1px solid #cbd5e1', textAlign: 'center' }}>
                       <button onClick={() => handleDeletePatient(p.patient_id)}
@@ -856,6 +964,41 @@ function App() {
         )}
       </div>
 
+        {/* グループ比較グラフ */}
+        {(() => {
+            const [compData, setCompData] = React.useState(null)
+            React.useEffect(() => {
+                if (!groupComparison) return
+                fetch(`${API_BASE}/lifelogs/group-comparison`)
+                    .then(r => r.json())
+                    .then(d => setCompData(d))
+            }, [groupComparison])
+            
+            if (!compData) return <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '1rem' }}>データ読み込み中...</p>
+            
+            const chartData = [
+                { name: '歩数', がんあり: compData.cancer.steps, がんなし: compData.healthy.steps },
+                { name: '睡眠(h)', がんあり: compData.cancer.sleep_hours, がんなし: compData.healthy.sleep_hours },
+                { name: '体重(kg)', がんあり: compData.cancer.weight, がんなし: compData.healthy.weight },
+            ]
+            
+            return compData ? (
+                <div style={{ marginTop: '1rem' }}>
+                    <ResponsiveContainer width="100%" height={220}>
+                        <BarChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                            <YAxis tick={{ fontSize: 10 }} />
+                            <Tooltip />
+                            <Legend />
+                            <Bar dataKey="がんあり" fill="#dc2626" />
+                            <Bar dataKey="がんなし" fill="#16a34a" />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
+            ) : null
+        })()}
+
       {/* ── タイムライン＋生活習慣ログ 横並び ── */}
       {timeline && (
           <div style={{ marginTop: '2rem', display: 'flex', gap: '1.5rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -863,6 +1006,34 @@ function App() {
               {/* 左：検査タイムライン */}
               <div style={{ flex: '1 1 300px', background: '#f8fafc', padding: '1.5rem', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
                   <h2 style={{ margin: '0 0 1rem' }}>📅 検査タイムライン</h2>
+                    {/* リスクスコア */}
+                    {riskScore && riskScore.score !== null && (
+                        <div style={{ background: 'white', border: `2px solid ${riskScore.level_color}`, borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.8rem' }}>
+                                <div style={{ textAlign: 'center' }}>
+                                    <p style={{ margin: 0, fontSize: '2.5rem', fontWeight: 'bold', color: riskScore.level_color }}>{riskScore.score}</p>
+                                    <p style={{ margin: 0, fontSize: '0.75rem', color: '#64748b' }}>/ 100点</p>
+                                </div>
+                                <div>
+                                    <p style={{ margin: '0 0 0.2rem', fontWeight: 'bold', color: riskScore.level_color, fontSize: '1.1rem' }}>
+                                        {riskScore.level}
+                                    </p>
+                                    <p style={{ margin: 0, color: '#64748b', fontSize: '0.78rem' }}>{riskScore.message}</p>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                {riskScore.details.map((d, i) => (
+                                    <div key={i} style={{ background: '#f8fafc', padding: '0.4rem 0.8rem', borderRadius: '4px', border: `1px solid ${d.color}` }}>
+                                        <span style={{ color: d.color, fontSize: '0.78rem', fontWeight: 'bold' }}>{d.item}：{d.status}</span>
+                                        <span style={{ color: '#64748b', fontSize: '0.75rem', marginLeft: '0.4rem' }}>{d.value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {riskScore && riskScore.score === null && (
+                        <p style={{ color: '#94a3b8', fontSize: '0.82rem', marginBottom: '1rem' }}>⚠️ {riskScore.message}</p>
+                    )}
                     {/* 異常傾向アラート */}
                     {(() => {
                         const alert = detectAlert(timeline.studies)
