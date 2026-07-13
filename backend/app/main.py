@@ -666,11 +666,14 @@ def toggle_cancer_flag(patient_id: str, flag: int, db: Session = Depends(get_db)
 def get_group_comparison(db: Session = Depends(get_db)):
     from database import LifeLog
     
-    cancer_patients = db.query(Patient).filter(Patient.cancer_flag == 1).all()
-    healthy_patients = db.query(Patient).filter(Patient.cancer_flag == 0).all()
+    cancer_patients = db.query(Patient).filter(Patient.cancer_flag == 1, Patient.remission_mode == 0).all()
+    remission_patients = db.query(Patient).filter(Patient.remission_mode == 1).all()
+    healthy_patients = db.query(Patient).filter(Patient.cancer_flag == 0, Patient.remission_mode == 0).all()
     
     def calc_avg(patient_list):
         ids = [p.patient_id for p in patient_list]
+        if not ids:
+            return {"steps": 0, "sleep_hours": 0, "weight": 0, "count": 0}
         logs = db.query(LifeLog).filter(LifeLog.patient_id.in_(ids)).all()
         if not logs:
             return {"steps": 0, "sleep_hours": 0, "weight": 0, "count": 0}
@@ -683,6 +686,7 @@ def get_group_comparison(db: Session = Depends(get_db)):
     
     return {
         "cancer": calc_avg(cancer_patients),
+        "remission": calc_avg(remission_patients),
         "healthy": calc_avg(healthy_patients)
     }
 
@@ -742,11 +746,32 @@ def get_risk_score(patient_id: str, db: Session = Depends(get_db)):
     else:
         level = "高リスク"
         level_color = "#dc2626"
+
+    # アドバイス生成
+    advice = []
+    if avg_steps < 3000:
+        advice.append("🚶 歩数が少なめです。1日3000歩を目標にしましょう。")
+    elif avg_steps < 6000:
+        advice.append("🚶 もう少し歩けると良いです。1日6000歩を目指しましょう。")
+
+    if avg_sleep < 5:
+        advice.append("😴 睡眠が不足しています。1日7時間以上の睡眠を心がけましょう。")
+    elif avg_sleep < 7:
+        advice.append("😴 睡眠をもう少し増やしましょう。理想は7〜8時間です。")
+
+    if avg_weight > 80:
+        advice.append("⚖️ 体重が高めです。食事と運動のバランスを見直しましょう。")
+    elif avg_weight > 70:
+        advice.append("⚖️ 体重がやや高めです。適度な運動を続けましょう。")
+
+    if not advice:
+        advice.append("✅ 生活習慣は良好です。この調子を維持しましょう！")
     
     return {
         "score": score,
         "level": level,
         "level_color": level_color,
         "message": f"生活習慣データ {len(logs)}件をもとに算出",
-        "details": details
+        "details": details,
+        "advice": advice
     }

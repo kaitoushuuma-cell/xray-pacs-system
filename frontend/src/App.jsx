@@ -75,6 +75,14 @@ function App() {
   const [groupComparison, setGroupComparison] = useState(false)
   const [riskScore, setRiskScore] = useState(null)
 
+  // DICOMビューア
+  const [viewerOpen, setViewerOpen] = useState(false)
+  const [viewerImages, setViewerImages] = useState([])
+  const [viewerIndex, setViewerIndex] = useState(0)
+  const [brightness, setBrightness] = useState(100)
+  const [contrast, setContrast] = useState(100)
+  const [zoom, setZoom] = useState(1)
+
 
   useEffect(() => {
     fetchPatients(); fetchStudies(); fetchReports()
@@ -123,21 +131,21 @@ function App() {
       }
       return { detected: false }
   }
-  const fetchLifelogs = async (patient_id) => {
-    const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs`)
-    const data = await res.json()
-    setLifelogs(data)
-  }
+      const fetchLifelogs = async (patient_id) => {
+        const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs`)
+        const data = await res.json()
+        setLifelogs(data)
+      }
 
-  const handleCreateLifelog = async (patient_id) => {
-      const params = new URLSearchParams({
-          record_date: lifelogForm.record_date,
-          steps: lifelogForm.steps,
-          sleep_hours: lifelogForm.sleep_hours,
-          meal: lifelogForm.meal,
-          weight: lifelogForm.weight,
-          memo: lifelogForm.memo
-      })
+      const handleCreateLifelog = async (patient_id) => {
+          const params = new URLSearchParams({
+              record_date: lifelogForm.record_date,
+              steps: lifelogForm.steps,
+              sleep_hours: lifelogForm.sleep_hours,
+              meal: lifelogForm.meal,
+              weight: lifelogForm.weight,
+              memo: lifelogForm.memo
+          })
       const res = await fetch(`${API_BASE}/patients/${patient_id}/lifelogs?${params}`, {
           method: 'POST'
       })
@@ -152,6 +160,21 @@ function App() {
     const newFlag = currentFlag ? 0 : 1
     await fetch(`${API_BASE}/patients/${patient_id}/cancer-flag?flag=${newFlag}`, { method: 'PATCH' })
     fetchPatients()
+}
+
+const openViewer = (images, startIndex = 0) => {
+    setViewerImages(images)
+    setViewerIndex(startIndex)
+    setBrightness(100)
+    setContrast(100)
+    setZoom(1)
+    setViewerOpen(true)
+}
+
+const closeViewer = () => {
+    setViewerOpen(false)
+    setViewerImages([])
+    setViewerIndex(0)
 }
 
 const toggleRemissionMode = async (patient_id, currentMode) => {
@@ -621,6 +644,78 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
         </div>
       )}
 
+      {/* ── DICOMビューア ── */}
+      {viewerOpen && (
+          <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 1001 }}>
+              
+              {/* 閉じるボタン */}
+              <button onClick={closeViewer}
+                  style={{ position: 'absolute', top: '1rem', right: '1.5rem', background: 'rgba(255,255,255,0.15)', border: 'none', color: 'white', fontSize: '1.4rem', width: '2.4rem', height: '2.4rem', borderRadius: '50%', cursor: 'pointer' }}>
+                  ✕
+              </button>
+
+              {/* タイトル */}
+              <p style={{ color: '#94a3b8', fontSize: '0.85rem', margin: '0 0 0.8rem' }}>
+                  🔬 DICOMビューア　{viewerIndex + 1} / {viewerImages.length}枚
+              </p>
+
+              {/* 画像 */}
+              <div style={{ overflow: 'hidden', width: '500px', height: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <img src={viewerImages[viewerIndex]}
+                      style={{
+                          maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+                          transform: `scale(${zoom})`,
+                          filter: `brightness(${brightness}%) contrast(${contrast}%)`,
+                          transition: 'transform 0.2s'
+                      }} />
+              </div>
+
+              {/* コントロールパネル */}
+              <div style={{ marginTop: '1rem', background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px', minWidth: '400px' }}>
+                  
+                  {/* 明るさ */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '0.5rem' }}>
+                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>☀️ 明るさ {brightness}%</span>
+                      <input type="range" min="50" max="200" value={brightness}
+                          onChange={e => setBrightness(e.target.value)}
+                          style={{ flex: 1 }} />
+                  </div>
+
+                  {/* コントラスト */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '0.5rem' }}>
+                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>🎨 コントラスト {contrast}%</span>
+                      <input type="range" min="50" max="200" value={contrast}
+                          onChange={e => setContrast(e.target.value)}
+                          style={{ flex: 1 }} />
+                  </div>
+
+                  {/* ズーム・ナビゲーション */}
+                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '0.8rem' }}>
+                      <button onClick={() => setViewerIndex((viewerIndex - 1 + viewerImages.length) % viewerImages.length)}
+                          style={{ padding: '0.4rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                          ← 前
+                      </button>
+                      <button onClick={() => setZoom(Math.max(zoom - 0.1, 0.5))}
+                          style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                          🔍－
+                      </button>
+                      <button onClick={() => { setZoom(1); setBrightness(100); setContrast(100) }}
+                          style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                          リセット
+                      </button>
+                      <button onClick={() => setZoom(Math.min(zoom + 0.1, 3.0))}
+                          style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                          🔍＋
+                      </button>
+                      <button onClick={() => setViewerIndex((viewerIndex + 1) % viewerImages.length)}
+                          style={{ padding: '0.4rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                          次 →
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* ── STEP 1: 患者登録 ── */}
       <div style={{ background: STEP_COLORS[1].bg, padding: '1.5rem', borderRadius: '8px', marginBottom: '2rem', borderLeft: `4px solid ${STEP_COLORS[1].border}` }}>
         <StepHeader step={1} title="患者登録" />
@@ -775,10 +870,10 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                         )}
                       </td>
                       <td style={{ padding: '0.6rem', border: '1px solid #ede9fe', textAlign: 'center' }}>
-                        {s.jpeg_file && (
+                       {s.jpeg_file && (
                           <img src={`${API_BASE}/images/${s.jpeg_file}`} alt="thumbnail"
                             style={{ width: '52px', height: '52px', objectFit: 'cover', display: 'block', margin: '0 auto 0.3rem', cursor: 'zoom-in', borderRadius: '3px', border: '1px solid #c4b5fd' }}
-                            onClick={() => setZoomedImage(`${API_BASE}/images/${s.jpeg_file}`)} />
+                            onClick={() => openViewer([`${API_BASE}/images/${s.jpeg_file}`], 0)} />
                         )}
                         <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center' }}>
                           <button onClick={() => openInline(s, 'ai')}
@@ -977,26 +1072,30 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
             if (!compData) return <p style={{ color: '#94a3b8', fontSize: '0.85rem', marginTop: '1rem' }}>データ読み込み中...</p>
             
             const chartData = [
-                { name: '歩数', がんあり: compData.cancer.steps, がんなし: compData.healthy.steps },
-                { name: '睡眠(h)', がんあり: compData.cancer.sleep_hours, がんなし: compData.healthy.sleep_hours },
-                { name: '体重(kg)', がんあり: compData.cancer.weight, がんなし: compData.healthy.weight },
+                { name: '歩数', がんあり: compData.cancer.steps, 寛解後: compData.remission.steps, がんなし: compData.healthy.steps },
+                { name: '睡眠(h)', がんあり: compData.cancer.sleep_hours, 寛解後: compData.remission.sleep_hours, がんなし: compData.healthy.sleep_hours },
+                { name: '体重(kg)', がんあり: compData.cancer.weight, 寛解後: compData.remission.weight, がんなし: compData.healthy.weight },
             ]
             
             return compData ? (
-                <div style={{ marginTop: '1rem' }}>
-                    <ResponsiveContainer width="100%" height={220}>
-                        <BarChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                            <YAxis tick={{ fontSize: 10 }} />
-                            <Tooltip />
-                            <Legend />
-                            <Bar dataKey="がんあり" fill="#dc2626" />
-                            <Bar dataKey="がんなし" fill="#16a34a" />
-                        </BarChart>
-                    </ResponsiveContainer>
-                </div>
-            ) : null
+                            <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                {chartData.map((item, i) => (
+                                    <div key={i} style={{ flex: 1, minWidth: '150px' }}>
+                                        <p style={{ textAlign: 'center', fontSize: '0.82rem', color: '#475569', margin: '0 0 0.3rem' }}>{item.name}</p>
+                                        <ResponsiveContainer width="100%" height={150}>
+                                            <BarChart data={[item]}>
+                                                <CartesianGrid strokeDasharray="3 3" />
+                                                <YAxis tick={{ fontSize: 10 }} />
+                                                <Tooltip />
+                                                <Bar dataKey="がんあり" fill="#dc2626" />
+                                                <Bar dataKey="寛解後" fill="#7c3aed" />
+                                                <Bar dataKey="がんなし" fill="#16a34a" />
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : null
         })()}
 
       {/* ── タイムライン＋生活習慣ログ 横並び ── */}
@@ -1009,11 +1108,24 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                     {/* リスクスコア */}
                     {riskScore && riskScore.score !== null && (
                         <div style={{ background: 'white', border: `2px solid ${riskScore.level_color}`, borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.8rem' }}>
+                           <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.8rem', flexWrap: 'wrap' }}>
                                 <div style={{ textAlign: 'center' }}>
                                     <p style={{ margin: 0, fontSize: '2.5rem', fontWeight: 'bold', color: riskScore.level_color }}>{riskScore.score}</p>
                                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#64748b' }}>/ 100点</p>
                                 </div>
+                                {/* アドバイス */}
+                                {riskScore.advice && riskScore.advice.length > 0 && (
+                                    <div style={{ marginTop: '0.8rem' }}>
+                                        <p style={{ fontWeight: 'bold', color: '#475569', margin: '0 0 0.5rem', fontSize: '0.85rem' }}>
+                                            💡 改善アドバイス
+                                        </p>
+                                        {riskScore.advice.map((a, i) => (
+                                            <p key={i} style={{ margin: '0.3rem 0', fontSize: '0.82rem', color: '#475569', background: '#f8fafc', padding: '0.5rem', borderRadius: '4px' }}>
+                                                {a}
+                                            </p>
+                                        ))}
+                                    </div>
+                                )}
                                 <div>
                                     <p style={{ margin: '0 0 0.2rem', fontWeight: 'bold', color: riskScore.level_color, fontSize: '1.1rem' }}>
                                         {riskScore.level}
@@ -1138,18 +1250,23 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                           {lifelogs.length > 1 && (
                               <div style={{ marginBottom: '1rem' }}>
                                   <p style={{ fontWeight: 'bold', color: '#92400e', margin: '0 0 0.5rem', fontSize: '0.88rem' }}>📈 トレンドグラフ</p>
-                                  <ResponsiveContainer width="100%" height={200}>
-                                      <LineChart data={lifelogs}>
-                                          <CartesianGrid strokeDasharray="3 3" />
-                                          <XAxis dataKey="record_date" tick={{ fontSize: 10 }} />
-                                          <YAxis tick={{ fontSize: 10 }} />
-                                          <Tooltip />
-                                          <Legend />
-                                          <Line type="monotone" dataKey="steps" stroke="#3b82f6" name="歩数" dot={true} />
-                                          <Line type="monotone" dataKey="sleep_hours" stroke="#8b5cf6" name="睡眠(h)" dot={true} />
-                                          <Line type="monotone" dataKey="weight" stroke="#f59e0b" name="体重(kg)" dot={true} />
-                                      </LineChart>
-                                  </ResponsiveContainer>
+                                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                    {chartData.map((item, i) => (
+                                        <div key={i} style={{ flex: 1, minWidth: '150px' }}>
+                                            <p style={{ textAlign: 'center', fontSize: '0.82rem', color: '#475569', margin: '0 0 0.3rem' }}>{item.name}</p>
+                                            <ResponsiveContainer width="100%" height={150}>
+                                                <BarChart data={[item]}>
+                                                    <CartesianGrid strokeDasharray="3 3" />
+                                                    <YAxis tick={{ fontSize: 10 }} />
+                                                    <Tooltip />
+                                                    <Bar dataKey="がんあり" fill="#dc2626" />
+                                                    <Bar dataKey="寛解後" fill="#7c3aed" />
+                                                    <Bar dataKey="がんなし" fill="#16a34a" />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+                                    ))}
+                                </div>
                               </div>
                           )}
                           {lifelogs.map(l => (
