@@ -775,3 +775,81 @@ def get_risk_score(patient_id: str, db: Session = Depends(get_db)):
         "details": details,
         "advice": advice
     }
+
+
+# 個別化治療アプローチ提案
+@app.get("/patients/{patient_id}/treatment-suggestion")
+def get_treatment_suggestion(patient_id: str, db: Session = Depends(get_db)):
+    from database import LifeLog
+    
+    patient = db.query(Patient).filter(Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="患者が見つかりません")
+    
+    studies = patient.studies
+    pneumonia_count = sum(1 for s in studies for img in s.images if img.ai_result == "肺炎")
+    normal_count = sum(1 for s in studies for img in s.images if img.ai_result == "正常")
+    total = pneumonia_count + normal_count
+    
+    if total == 0:
+        return {"suggestion": None, "message": "診断履歴が不足しています"}
+    
+    # 生活習慣データを取得
+    logs = db.query(LifeLog).filter(LifeLog.patient_id == patient_id).all()
+    avg_sleep = sum(l.sleep_hours or 0 for l in logs) / len(logs) if logs else None
+    avg_steps = sum(l.steps or 0 for l in logs) / len(logs) if logs else None
+    
+    suggestions = []
+    
+    if pneumonia_count >= 2:
+        detail = f"過去{pneumonia_count}回の肺炎診断歴があります。定期的な呼吸器系検査を推奨します。"
+        
+        # 生活習慣データと組み合わせた複合提案
+        if avg_sleep is not None and avg_sleep < 6:
+            detail += f" 平均睡眠時間が{avg_sleep:.1f}時間と不足しており、免疫力低下のリスクがあるため、睡眠改善指導も併せて推奨します。"
+        if avg_steps is not None and avg_steps < 3000:
+            detail += f" 平均歩数が{avg_steps:.0f}歩と少なく、運動不足が呼吸機能低下に影響している可能性があります。"
+        
+        suggestions.append({
+            "priority": "高",
+            "title": "呼吸器系フォローアップ推奨（生活習慣連携）",
+            "detail": detail
+        })
+    elif pneumonia_count == 1:
+        suggestions.append({
+            "priority": "中",
+            "title": "経過観察推奨",
+            "detail": "肺炎の既往があります。次回検査での経過確認を推奨します。"
+        })
+    else:
+            detail = "現在のところ呼吸器系の異常所見はありません。定期検査を継続してください。"
+            
+            # 正常でも生活習慣にリスクがあれば予防提案
+            preventive_notes = []
+            if avg_sleep is not None and avg_sleep < 6:
+                preventive_notes.append(f"平均睡眠時間が{avg_sleep:.1f}時間とやや短いため、今後の免疫力維持のため睡眠改善を推奨します。")
+            if avg_steps is not None and avg_steps < 3000:
+                preventive_notes.append(f"平均歩数が{avg_steps:.0f}歩と少なめのため、予防的な運動習慣の見直しを推奨します。")
+            
+            if preventive_notes:
+                detail += " " + " ".join(preventive_notes)
+                suggestions.append({
+                    "priority": "低",
+                    "title": "予防的な生活習慣改善提案",
+                    "detail": detail
+                })
+            else:
+                suggestions.append({
+                    "priority": "低",
+                    "title": "現状維持",
+                    "detail": detail
+                })
+        
+    return {
+        "patient_name": patient.name,
+        "pneumonia_count": pneumonia_count,
+        "normal_count": normal_count,
+        "avg_sleep_hours": round(avg_sleep, 1) if avg_sleep else None,
+        "avg_steps": round(avg_steps, 0) if avg_steps else None,
+        "suggestions": suggestions
+    }

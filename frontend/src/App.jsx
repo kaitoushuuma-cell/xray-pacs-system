@@ -82,6 +82,13 @@ function App() {
   const [brightness, setBrightness] = useState(100)
   const [contrast, setContrast] = useState(100)
   const [zoom, setZoom] = useState(1)
+  
+  const canvasRef = useRef(null)
+  const [drawMode, setDrawMode] = useState(false)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [lastPos, setLastPos] = useState(null)
+  const [drawColor, setDrawColor] = useState('#ff0000')
+  const [treatmentSuggestion, setTreatmentSuggestion] = useState(null)
 
 
   useEffect(() => {
@@ -116,6 +123,10 @@ function App() {
       const riskRes = await fetch(`${API_BASE}/patients/${patient_id}/risk-score`)
       const riskData = await riskRes.json()
       setRiskScore(riskData)
+      // 治療提案も取得
+      const treatRes = await fetch(`${API_BASE}/patients/${patient_id}/treatment-suggestion`)
+      const treatData = await treatRes.json()
+      setTreatmentSuggestion(treatData)
   }
     // 異常傾向を検出する関数
   const detectAlert = (studies) => {
@@ -175,6 +186,43 @@ const closeViewer = () => {
     setViewerOpen(false)
     setViewerImages([])
     setViewerIndex(0)
+}
+
+// アノテーション描画
+const startDraw = (e) => {
+    if (!drawMode) return
+    const canvas = canvasRef.current
+    const rect = canvas.getBoundingClientRect()
+    setIsDrawing(true)
+    setLastPos({ x: e.clientX - rect.left, y: e.clientY - rect.top })
+}
+
+const draw = (e) => {
+    if (!drawMode || !isDrawing || !lastPos) return
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    const rect = canvas.getBoundingClientRect()
+    const currentPos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    
+    ctx.beginPath()
+    ctx.moveTo(lastPos.x, lastPos.y)
+    ctx.lineTo(currentPos.x, currentPos.y)
+    ctx.strokeStyle = drawColor
+    ctx.lineWidth = 2
+    ctx.stroke()
+    
+    setLastPos(currentPos)
+}
+
+const endDraw = () => {
+    setIsDrawing(false)
+    setLastPos(null)
+}
+
+const clearCanvas = () => {
+    const canvas = canvasRef.current
+    const ctx = canvas.getContext('2d')
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
 }
 
 const toggleRemissionMode = async (patient_id, currentMode) => {
@@ -659,15 +707,24 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                   🔬 DICOMビューア　{viewerIndex + 1} / {viewerImages.length}枚
               </p>
 
-              {/* 画像 */}
-              <div style={{ overflow: 'hidden', width: '500px', height: '500px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {/* 画像 + Canvas */}
+              <div style={{ position: 'relative', width: '500px', height: '500px' }}>
                   <img src={viewerImages[viewerIndex]}
                       style={{
-                          maxWidth: '100%', maxHeight: '100%', objectFit: 'contain',
+                          width: '500px', height: '500px', objectFit: 'contain',
                           transform: `scale(${zoom})`,
                           filter: `brightness(${brightness}%) contrast(${contrast}%)`,
-                          transition: 'transform 0.2s'
+                          position: 'absolute', top: 0, left: 0
                       }} />
+                  <canvas
+                      ref={canvasRef}
+                      width={500}
+                      height={500}
+                      style={{ position: 'absolute', top: 0, left: 0, cursor: drawMode ? 'crosshair' : 'default' }}
+                      onMouseDown={startDraw}
+                      onMouseMove={draw}
+                      onMouseUp={endDraw}
+                  />
               </div>
 
               {/* コントロールパネル */}
@@ -711,6 +768,21 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                           style={{ padding: '0.4rem 1rem', background: '#3b82f6', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                           次 →
                       </button>
+
+                  {/* アノテーションツール */}
+                  <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                      <button onClick={() => setDrawMode(!drawMode)}
+                          style={{ padding: '0.4rem 1rem', background: drawMode ? '#dc2626' : '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}>
+                          {drawMode ? '✏️ 描画中' : '✏️ 描画'}
+                      </button>
+                      <input type="color" value={drawColor} onChange={e => setDrawColor(e.target.value)}
+                          style={{ width: '2.5rem', height: '2rem', padding: '0', border: 'none', cursor: 'pointer', borderRadius: '4px' }} />
+                      <button onClick={clearCanvas}
+                          style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.82rem' }}>
+                          🗑️ 消す
+                      </button>
+                  </div>
+                  
                   </div>
               </div>
           </div>
@@ -1190,6 +1262,23 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                       ))}
                   </div>
               </div>
+
+              {/* 個別化治療アプローチ提案 */}
+              {treatmentSuggestion && treatmentSuggestion.suggestions && (
+                  <div style={{ background: '#eff6ff', border: '2px solid #3b82f6', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+                      <p style={{ fontWeight: 'bold', color: '#1d4ed8', margin: '0 0 0.8rem', fontSize: '1rem' }}>
+                          🩺 個別化治療アプローチ提案
+                      </p>
+                      {treatmentSuggestion.suggestions.map((s, i) => (
+                          <div key={i} style={{ background: 'white', padding: '0.8rem', borderRadius: '6px', marginBottom: '0.5rem', border: `1px solid ${s.priority === '高' ? '#dc2626' : s.priority === '中' ? '#d97706' : '#16a34a'}` }}>
+                              <p style={{ margin: '0 0 0.3rem', fontWeight: 'bold', color: s.priority === '高' ? '#dc2626' : s.priority === '中' ? '#d97706' : '#16a34a' }}>
+                                  【優先度：{s.priority}】{s.title}
+                              </p>
+                              <p style={{ margin: 0, fontSize: '0.85rem', color: '#475569' }}>{s.detail}</p>
+                          </div>
+                      ))}
+                  </div>
+              )}
 
               {/* 右：生活習慣ログ */}
               <div style={{ flex: '1 1 300px', background: '#fefce8', padding: '1.5rem', borderRadius: '8px', border: '1px solid #fde68a' }}>
