@@ -9,6 +9,7 @@ import joblib
 import shutil
 import uuid
 import os
+import json
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -76,6 +77,16 @@ def get_patients(db: Session = Depends(get_db)):
         }
         for p in patients
     ]
+
+@app.get("/patients/search")
+def search_patients(name: str, db: Session = Depends(get_db)):
+    # ここを自分で書く
+    patient = db.query(Patient).all()
+    result=[]
+    for p in patient:
+        if p.name == name:
+            result.append(p)
+    return result 
 
 # 患者詳細取得（過去検査履歴含む）
 @app.get("/patients/{patient_id}")
@@ -499,6 +510,19 @@ async def add_image_to_study(study_id: str, file: UploadFile = File(...), db: Se
 # DICOM対応
 # ────────────────────────────
 
+DICOM_HEADER_TAGS = [
+    "PatientName", "Modality", "StudyDate", "Manufacturer",
+    "SliceThickness", "KVP", "Rows", "Columns", "WindowCenter", "WindowWidth",
+]
+
+def _extract_dicom_header(ds):
+    """pydicomのdsから主要タグを辞書で取り出す（無い値は"不明"）"""
+    header = {}
+    for tag in DICOM_HEADER_TAGS:
+        value = ds.get(tag, None)
+        header[tag] = str(value) if value is not None and str(value) != "" else "不明"
+    return header
+
 @app.post("/dicom/upload")
 async def upload_dicom(
     patient_id: str,
@@ -517,6 +541,7 @@ async def upload_dicom(
     # DICOMファイルを読み込む
     contents = await file.read()
     ds = pydicom.dcmread(io.BytesIO(contents), force=True)
+    header_info = _extract_dicom_header(ds)
 
     # ヘッダ情報を取得
     modality = str(ds.get("Modality", "不明"))
@@ -567,7 +592,8 @@ async def upload_dicom(
             study_id=study.id,  # ← 確定したidを使う
             file_path=f"/root/xray-pacs-system/data/images/{jpeg_filename}",
             ai_result=None,
-            ai_confidence=None
+            ai_confidence=None,
+            dicom_header=json.dumps(header_info, ensure_ascii=False)
         )
         db.add(image_record)
         db.commit()
@@ -581,6 +607,24 @@ async def upload_dicom(
         "image_size": f"{rows} x {cols}",
         "jpeg_file": jpeg_filename
     }
+
+@app.get("/studies/{study_id}/header")
+def get_study_header(study_id: str, db: Session = Depends(get_db)):
+    study = db.query(Study).filter(Study.study_id == study_id).first()
+    if not study:
+        raise HTTPException(status_code=404, detail="検査が見つかりません")
+    image = (
+        db.query(Image)
+        .filter(Image.study_id == study.id, Image.dicom_header.isnot(None))
+        .order_by(Image.created_at.desc(), Image.id.desc())
+        .first()
+    )
+    if not image:
+        return {"header": None}
+    try:
+        return {"header": json.loads(image.dicom_header)}
+    except json.JSONDecodeError:
+        return {"header": None}
 
     # ────────────────────────────
 # 画像配信

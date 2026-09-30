@@ -45,6 +45,7 @@ class Image(Base):
     file_path   = Column(String)                            # 保存パス
     ai_result   = Column(String)                            # AI診断結果
     ai_confidence = Column(Float)                           # 確信度
+    dicom_header = Column(String)                           # DICOMヘッダー情報(JSON文字列)
     created_at  = Column(DateTime, default=datetime.now)
     study       = relationship("Study", back_populates="images")
 

@@ -82,6 +82,11 @@ function App() {
   const [brightness, setBrightness] = useState(100)
   const [contrast, setContrast] = useState(100)
   const [zoom, setZoom] = useState(1)
+  const [viewerStudyId, setViewerStudyId] = useState(null)
+  const [dicomHeader, setDicomHeader] = useState(null)
+  const [windowWidth, setWindowWidth] = useState(255)
+  const [windowLevel, setWindowLevel] = useState(128)
+  const imgCanvasRef = useRef(null)
   
   const canvasRef = useRef(null)
   const [drawMode, setDrawMode] = useState(false)
@@ -173,20 +178,68 @@ function App() {
     fetchPatients()
 }
 
-const openViewer = (images, startIndex = 0) => {
+const openViewer = (images, startIndex = 0, studyId = null) => {
     setViewerImages(images)
     setViewerIndex(startIndex)
     setBrightness(100)
     setContrast(100)
     setZoom(1)
+    setWindowWidth(255)
+    setWindowLevel(128)
+    setViewerStudyId(studyId)
+    setDicomHeader(null)
     setViewerOpen(true)
+    if (studyId) {
+        fetch(`${API_BASE}/studies/${studyId}/header`)
+            .then(res => res.ok ? res.json() : { header: null })
+            .then(data => setDicomHeader(data.header))
+            .catch(() => setDicomHeader(null))
+    }
 }
 
 const closeViewer = () => {
     setViewerOpen(false)
     setViewerImages([])
     setViewerIndex(0)
+    setViewerStudyId(null)
+    setDicomHeader(null)
 }
+
+// WW/WL: 画像をcanvasに描画し、ピクセルごとに線形変換をかける
+useEffect(() => {
+    if (!viewerOpen || viewerImages.length === 0) return
+    const canvas = imgCanvasRef.current
+    if (!canvas) return
+    let cancelled = false
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onload = () => {
+        if (cancelled) return
+        const ctx = canvas.getContext('2d')
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        // objectFit: contain 相当（アスペクト比を保って中央に配置）
+        const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+        const w = img.width * scale
+        const h = img.height * scale
+        const x = (canvas.width - w) / 2
+        const y = (canvas.height - h) / 2
+        ctx.drawImage(img, x, y, w, h)
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        const data = imageData.data
+        const ww = Number(windowWidth)
+        const low = Number(windowLevel) - ww / 2
+        for (let i = 0; i < data.length; i += 4) {
+            for (let c = 0; c < 3; c++) {
+                const out = (data[i + c] - low) / ww * 255
+                data[i + c] = out < 0 ? 0 : out > 255 ? 255 : out
+            }
+        }
+        ctx.putImageData(imageData, 0, 0)
+    }
+    img.src = viewerImages[viewerIndex]
+    return () => { cancelled = true }
+}, [viewerOpen, viewerImages, viewerIndex, windowWidth, windowLevel])
 
 // アノテーション描画
 const startDraw = (e) => {
@@ -709,11 +762,13 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
 
               {/* 画像 + Canvas */}
               <div style={{ position: 'relative', width: '500px', height: '500px' }}>
-                  <img src={viewerImages[viewerIndex]}
+                  <canvas
+                      ref={imgCanvasRef}
+                      width={500}
+                      height={500}
                       style={{
-                          width: '500px', height: '500px', objectFit: 'contain',
+                          width: '500px', height: '500px',
                           transform: `scale(${zoom})`,
-                          filter: `brightness(${brightness}%) contrast(${contrast}%)`,
                           position: 'absolute', top: 0, left: 0
                       }} />
                   <canvas
@@ -730,21 +785,32 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
               {/* コントロールパネル */}
               <div style={{ marginTop: '1rem', background: 'rgba(255,255,255,0.1)', padding: '1rem', borderRadius: '8px', minWidth: '400px' }}>
                   
-                  {/* 明るさ */}
+                  {/* Window Width */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '0.5rem' }}>
-                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>☀️ 明るさ {brightness}%</span>
-                      <input type="range" min="50" max="200" value={brightness}
-                          onChange={e => setBrightness(e.target.value)}
+                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>WW {windowWidth}</span>
+                      <input type="range" min="1" max="255" value={windowWidth}
+                          onChange={e => setWindowWidth(Number(e.target.value))}
                           style={{ flex: 1 }} />
                   </div>
 
-                  {/* コントラスト */}
+                  {/* Window Level */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '0.5rem' }}>
-                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>🎨 コントラスト {contrast}%</span>
-                      <input type="range" min="50" max="200" value={contrast}
-                          onChange={e => setContrast(e.target.value)}
+                      <span style={{ color: 'white', fontSize: '0.82rem', width: '100px' }}>WL {windowLevel}</span>
+                      <input type="range" min="0" max="255" value={windowLevel}
+                          onChange={e => setWindowLevel(Number(e.target.value))}
                           style={{ flex: 1 }} />
                   </div>
+
+                  {/* DICOMヘッダー */}
+                  {dicomHeader ? (
+                      <div style={{ background: 'rgba(0,0,0,0.3)', padding: '0.5rem 0.8rem', borderRadius: '4px', marginBottom: '0.5rem', fontSize: '0.78rem', color: '#cbd5e1', maxHeight: '140px', overflowY: 'auto' }}>
+                          {Object.entries(dicomHeader).map(([key, value]) => (
+                              <div key={key}><span style={{ color: '#94a3b8' }}>{key}:</span> {String(value)}</div>
+                          ))}
+                      </div>
+                  ) : viewerStudyId && (
+                      <p style={{ color: '#94a3b8', fontSize: '0.78rem', margin: '0 0 0.5rem' }}>DICOMヘッダー情報なし</p>
+                  )}
 
                   {/* ズーム・ナビゲーション */}
                   <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', marginTop: '0.8rem' }}>
@@ -756,7 +822,7 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                           style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                           🔍－
                       </button>
-                      <button onClick={() => { setZoom(1); setBrightness(100); setContrast(100) }}
+                      <button onClick={() => { setZoom(1); setWindowWidth(255); setWindowLevel(128); setBrightness(100); setContrast(100) }}
                           style={{ padding: '0.4rem 1rem', background: '#475569', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                           リセット
                       </button>
@@ -945,7 +1011,7 @@ const toggleRemissionMode = async (patient_id, currentMode) => {
                        {s.jpeg_file && (
                           <img src={`${API_BASE}/images/${s.jpeg_file}`} alt="thumbnail"
                             style={{ width: '52px', height: '52px', objectFit: 'cover', display: 'block', margin: '0 auto 0.3rem', cursor: 'zoom-in', borderRadius: '3px', border: '1px solid #c4b5fd' }}
-                            onClick={() => openViewer([`${API_BASE}/images/${s.jpeg_file}`], 0)} />
+                            onClick={() => openViewer([`${API_BASE}/images/${s.jpeg_file}`], 0, s.study_id)} />
                         )}
                         <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'center' }}>
                           <button onClick={() => openInline(s, 'ai')}
